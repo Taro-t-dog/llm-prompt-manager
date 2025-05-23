@@ -110,12 +110,55 @@ if 'branches' not in st.session_state:
     st.session_state.branches = {"main": []}
 if 'tags' not in st.session_state:
     st.session_state.tags = {}
+if 'selected_model' not in st.session_state:
+    st.session_state.selected_model = "gemini-2.0-flash-exp"
+
+# モデル設定辞書
+MODEL_CONFIGS = {
+    "gemini-2.0-flash-exp": {
+        "name": "Gemini 2.0 Flash",
+        "model_id": "gemini-2.0-flash-exp",
+        "input_cost_per_token": 0.0000001,  # $0.10 per 1M tokens
+        "output_cost_per_token": 0.0000004,  # $0.40 per 1M tokens
+        "description": "Fast, cost-efficient model with 1M context window",
+        "context_window": 1000000,
+        "free_tier": True
+    },
+    "gemini-1.5-flash": {
+        "name": "Gemini 1.5 Flash",
+        "model_id": "gemini-1.5-flash",
+        "input_cost_per_token": 0.0,  # Free
+        "output_cost_per_token": 0.0,  # Free
+        "description": "Free model with generous rate limits",
+        "context_window": 1000000,
+        "free_tier": True
+    },
+    "gemini-1.5-pro": {
+        "name": "Gemini 1.5 Pro",
+        "model_id": "gemini-1.5-pro",
+        "input_cost_per_token": 0.00000125,  # $1.25 per 1M tokens
+        "output_cost_per_token": 0.000005,    # $5.00 per 1M tokens
+        "description": "High-performance model for complex tasks",
+        "context_window": 2000000,
+        "free_tier": True
+    },
+    "gemini-2.5-pro": {
+        "name": "Gemini 2.5 Pro",
+        "model_id": "gemini-2.5-pro",
+        "input_cost_per_token": 0.00000125,  # $1.25 per 1M tokens (up to 200K)
+        "output_cost_per_token": 0.00001,     # $10.00 per 1M tokens
+        "description": "Most advanced reasoning model",
+        "context_window": 2000000,
+        "free_tier": False
+    }
+}
 
 class GeminiEvaluator:
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, model_config: dict):
         self.api_key = api_key
+        self.model_config = model_config
         genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        self.model = genai.GenerativeModel(model_config['model_id'])
     
     def count_tokens(self, text: str) -> int:
         """テキストのトークン数を概算"""
@@ -129,9 +172,9 @@ class GeminiEvaluator:
             input_tokens = self.count_tokens(prompt)
             output_tokens = self.count_tokens(response.text)
             
-            # Gemini 2.0 Flash の料金（概算）
-            input_cost = input_tokens * 0.0000001 
-            output_cost = output_tokens * 0.0000004 
+            # 動的料金計算
+            input_cost = input_tokens * self.model_config['input_cost_per_token']
+            output_cost = output_tokens * self.model_config['output_cost_per_token']
             total_cost = input_cost + output_cost
             
             return {
@@ -140,6 +183,8 @@ class GeminiEvaluator:
                 'output_tokens': output_tokens,
                 'total_tokens': input_tokens + output_tokens,
                 'cost_usd': total_cost,
+                'model_name': self.model_config['name'],
+                'model_id': self.model_config['model_id'],
                 'success': True,
                 'error': None
             }
@@ -150,6 +195,8 @@ class GeminiEvaluator:
                 'output_tokens': 0,
                 'total_tokens': 0,
                 'cost_usd': 0,
+                'model_name': self.model_config['name'],
+                'model_id': self.model_config['model_id'],
                 'success': False,
                 'error': str(e)
             }
@@ -299,6 +346,45 @@ def main():
             st.error("⚠️ APIキーを入力してください")
             st.stop()
         
+        # モデル選択
+        st.subheader("🤖 モデル選択")
+        
+        model_options = list(MODEL_CONFIGS.keys())
+        model_labels = [f"{MODEL_CONFIGS[key]['name']}" for key in model_options]
+        
+        selected_model_index = model_options.index(st.session_state.selected_model) if st.session_state.selected_model in model_options else 0
+        
+        selected_model = st.selectbox(
+            "使用するモデル",
+            model_options,
+            format_func=lambda x: MODEL_CONFIGS[x]['name'],
+            index=selected_model_index
+        )
+        
+        if selected_model != st.session_state.selected_model:
+            st.session_state.selected_model = selected_model
+        
+        # 選択されたモデルの詳細情報
+        current_model = MODEL_CONFIGS[st.session_state.selected_model]
+        
+        st.markdown(f"""
+        **📋 モデル詳細:**
+        - **名前**: {current_model['name']}
+        - **説明**: {current_model['description']}
+        - **コンテキスト**: {current_model['context_window']:,} tokens
+        - **無料枠**: {'✅ あり' if current_model['free_tier'] else '❌ なし'}
+        """)
+        
+        # 料金情報
+        if current_model['input_cost_per_token'] == 0 and current_model['output_cost_per_token'] == 0:
+            st.success("💰 **完全無料!**")
+        else:
+            st.markdown(f"""
+            **💰 料金:**
+            - 入力: ${current_model['input_cost_per_token'] * 1000000:.2f}/1M tokens
+            - 出力: ${current_model['output_cost_per_token'] * 1000000:.2f}/1M tokens
+            """)
+        
         st.markdown("---")
         
         # データ管理
@@ -325,32 +411,89 @@ def main():
             )
         
         # 履歴読み込み
+        st.subheader("📂 履歴読み込み")
+        
         uploaded_file = st.file_uploader(
-            "📂 履歴ファイルを読み込み",
-            type="json",
-            help="過去に保存した履歴ファイルを読み込みます"
+            "履歴ファイルを選択",
+            type=["json", "csv"],
+            help="JSONファイル（完全復元）またはCSVファイル（基本データのみ）を読み込みます"
         )
         
         if uploaded_file is not None:
+            file_extension = uploaded_file.name.split('.')[-1].lower()
+            
             try:
-                history_data = json.load(uploaded_file)
-                
-                if st.button("📥 履歴を復元"):
-                    # データを復元（タイムスタンプはそのまま文字列として保持）
-                    st.session_state.evaluation_history = history_data.get('evaluation_history', [])
-                    st.session_state.branches = history_data.get('branches', {"main": []})
-                    st.session_state.tags = history_data.get('tags', {})
-                    st.session_state.current_branch = history_data.get('current_branch', 'main')
+                if file_extension == 'json':
+                    # JSON読み込み
+                    history_data = json.load(uploaded_file)
                     
-                    st.success("✅ 履歴を復元しました！")
-                    st.rerun()
+                    if st.button("📥 JSON履歴を復元"):
+                        # データを復元（タイムスタンプはそのまま文字列として保持）
+                        st.session_state.evaluation_history = history_data.get('evaluation_history', [])
+                        st.session_state.branches = history_data.get('branches', {"main": []})
+                        st.session_state.tags = history_data.get('tags', {})
+                        st.session_state.current_branch = history_data.get('current_branch', 'main')
+                        
+                        st.success("✅ JSON履歴を復元しました！")
+                        st.rerun()
+                    
+                    # プレビュー情報
+                    total_records = len(history_data.get('evaluation_history', []))
+                    export_time = history_data.get('export_timestamp', 'Unknown')
+                    if 'T' in str(export_time):
+                        export_time = format_timestamp(export_time)
+                    st.info(f"📊 {total_records}件の記録\n📅 {export_time}")
                 
-                # プレビュー情報
-                total_records = len(history_data.get('evaluation_history', []))
-                export_time = history_data.get('export_timestamp', 'Unknown')
-                if 'T' in str(export_time):
-                    export_time = format_timestamp(export_time)
-                st.info(f"📊 {total_records}件の記録\n📅 {export_time}")
+                elif file_extension == 'csv':
+                    # CSV読み込み
+                    df = pd.read_csv(uploaded_file)
+                    
+                    if st.button("📥 CSV履歴をインポート"):
+                        # CSVデータを内部形式に変換
+                        imported_records = []
+                        current_branch = st.session_state.current_branch
+                        
+                        for _, row in df.iterrows():
+                            record = {
+                                'timestamp': row.get('timestamp', datetime.datetime.now().isoformat()),
+                                'execution_mode': row.get('execution_mode', '単一プロンプト'),
+                                'prompt_template': row.get('prompt_template', None),
+                                'user_input': row.get('user_input', None),
+                                'final_prompt': row.get('final_prompt', ''),
+                                'criteria': row.get('criteria', ''),
+                                'response': row.get('response', ''),
+                                'evaluation': row.get('evaluation', ''),
+                                'execution_tokens': int(row.get('execution_tokens', 0)),
+                                'evaluation_tokens': int(row.get('evaluation_tokens', 0)),
+                                'execution_cost': float(row.get('execution_cost', 0.0)),
+                                'evaluation_cost': float(row.get('evaluation_cost', 0.0)),
+                                'total_cost': float(row.get('total_cost', 0.0)),
+                                'commit_hash': row.get('commit_hash', generate_commit_hash(str(row.to_dict()))),
+                                'commit_message': row.get('commit_message', 'CSVインポート'),
+                                'branch': row.get('branch', current_branch),
+                                'parent_hash': row.get('parent_hash', None)
+                            }
+                            imported_records.append(record)
+                        
+                        # 既存データに追加
+                        st.session_state.evaluation_history.extend(imported_records)
+                        
+                        # ブランチ別に整理
+                        for record in imported_records:
+                            branch_name = record['branch']
+                            if branch_name not in st.session_state.branches:
+                                st.session_state.branches[branch_name] = []
+                            st.session_state.branches[branch_name].append(record)
+                        
+                        st.success(f"✅ CSV履歴をインポートしました！（{len(imported_records)}件）")
+                        st.rerun()
+                    
+                    # CSVプレビュー情報
+                    st.info(f"📊 {len(df)}件の記録\n📋 列数: {len(df.columns)}")
+                    
+                    # データプレビュー
+                    if st.checkbox("🔍 CSVデータをプレビュー"):
+                        st.dataframe(df.head(), use_container_width=True)
                 
             except Exception as e:
                 st.error(f"❌ ファイル読み込みエラー: {str(e)}")
@@ -546,10 +689,11 @@ def main():
                 return
             
             # 実行
-            evaluator = GeminiEvaluator(st.session_state.api_key)
+            current_model_config = MODEL_CONFIGS[st.session_state.selected_model]
+            evaluator = GeminiEvaluator(st.session_state.api_key, current_model_config)
             
             # プロンプト実行
-            with st.spinner("🔄 プロンプト実行中..."):
+            with st.spinner(f"🔄 {current_model_config['name']}でプロンプト実行中..."):
                 execution_result = evaluator.execute_prompt(final_prompt)
             
             if not execution_result['success']:
@@ -582,7 +726,9 @@ def main():
                 'evaluation_tokens': evaluation_result['total_tokens'],
                 'execution_cost': execution_result['cost_usd'],
                 'evaluation_cost': evaluation_result['cost_usd'],
-                'total_cost': execution_result['cost_usd']  # 実行コストのみ
+                'total_cost': execution_result['cost_usd'],  # 実行コストのみ
+                'model_name': execution_result['model_name'],
+                'model_id': execution_result['model_id']
             }
             
             execution_record = create_commit(execution_data, execution_memo)
@@ -592,7 +738,8 @@ def main():
             st.session_state.branches[st.session_state.current_branch].append(execution_record)
             
             # 結果表示
-            st.success(f"✅ 実行完了！ID: `{execution_record['commit_hash']}`")
+            st.success(f"✅ 実行完了！使用モデル: {execution_result['model_name']}")
+            st.info(f"🔗 実行ID: `{execution_record['commit_hash']}`")
             st.markdown("---")
             
             # 1. LLMの回答（最優先表示）
@@ -679,6 +826,7 @@ def main():
             exec_hash = execution['commit_hash']
             exec_memo = execution.get('commit_message', 'メモなし')
             branch = execution.get('branch', 'unknown')
+            model_name = execution.get('model_name', 'Unknown Model')
             
             # タグチェック
             tags_for_execution = [tag for tag, hash_val in st.session_state.tags.items() if hash_val == exec_hash]
@@ -691,6 +839,7 @@ def main():
                         <span class="branch-tag">{branch}</span>
                         {' '.join([f'<span class="tag-label">{tag}</span>' for tag in tags_for_execution])}
                         <strong>{exec_memo}</strong>
+                        <br><small>🤖 {model_name}</small>
                     </div>
                     <span class="commit-hash">{exec_hash}</span>
                 </div>
@@ -911,4 +1060,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
