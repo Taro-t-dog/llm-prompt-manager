@@ -157,19 +157,132 @@ class GeminiEvaluator:
     def __init__(self, api_key: str, model_config: dict):
         self.api_key = api_key
         self.model_config = model_config
+        self.token_cache = {}  # トークン数キャッシュ
         genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel(model_config['model_id'])
+        
+        # count_tokens API利用可能性をチェック
+        try:
+            # テスト呼び出し（正しい引数形式）
+            test_result = self.model.count_tokens(["test"])
+            self.use_accurate_counting = True
+            st.success("✅ 正確なトークン数算出APIが利用可能です！")
+        except Exception as e:
+            self.use_accurate_counting = False
+            error_message = str(e)
+            
+            # エラータイプ別の対応メッセージ
+            if "API_KEY_INVALID" in error_message or "API key expired" in error_message:
+                st.error("🔑 **APIキーが無効または期限切れです**")
+                st.markdown("""
+                **対処方法:**
+                1. [Google AI Studio](https://makersuite.google.com/app/apikey) でAPIキーを更新
+                2. 新しいAPIキーをサイドバーで入力
+                3. ページを再読み込み
+                """)
+            elif "PERMISSION_DENIED" in error_message:
+                st.error("🚫 **APIアクセス権限がありません**")
+                st.info("Google AI Studioでアカウント設定を確認してください")
+            elif "QUOTA_EXCEEDED" in error_message:
+                st.error("📊 **API使用量上限に達しました**")
+                st.info("Google AI Studioで使用量を確認するか、時間をおいて再試行してください")
+            else:
+                st.warning(f"⚠️ 正確なトークン数算出APIが利用できません。改良された概算モードで動作します。")
+                st.info(f"詳細エラー: {error_message}")
+    
+    def count_tokens_accurate(self, text: str) -> int:
+        """公式APIを使用した正確なトークン数算出"""
+        if not self.use_accurate_counting:
+            return self.count_tokens_improved(text)
+        
+        # キャッシュチェック
+        text_hash = hashlib.md5(text.encode()).hexdigest()[:8]
+        cache_key = f"{self.model_config['model_id']}:{text_hash}"
+        
+        if cache_key in self.token_cache:
+            return self.token_cache[cache_key]
+        
+        try:
+            # 正しい構文：リスト形式で渡す
+            result = self.model.count_tokens([text])
+            token_count = result.total_tokens
+            
+            # キャッシュに保存（メモリ節約のため最新100件のみ）
+            if len(self.token_cache) > 100:
+                # 古いエントリを削除
+                oldest_key = next(iter(self.token_cache))
+                del self.token_cache[oldest_key]
+            
+            self.token_cache[cache_key] = token_count
+            return token_count
+            
+        except Exception as e:
+            # 実行時エラーは警告のみ（初期化時ほど重要ではない）
+            if not hasattr(self, '_runtime_warning_shown'):
+                st.warning(f"正確なトークン数取得に失敗。改良された概算値を使用します。")
+                self._runtime_warning_shown = True
+            return self.count_tokens_improved(text)
+    
+    def count_tokens_improved(self, text: str) -> int:
+        """改良された概算方式（実際のトークナイザーに近い精度）"""
+        
+        # キャッシュチェック
+        text_hash = hashlib.md5(text.encode()).hexdigest()[:8]
+        cache_key = f"improved:{text_hash}"
+        
+        if cache_key in self.token_cache:
+            return self.token_cache[cache_key]
+        
+        # Gemini公式の近似式: 1トークン ≈ 4文字
+        # しかし言語や内容によって調整が必要
+        
+        char_count = len(text)
+        
+        # 言語別調整
+        japanese_chars = len(re.findall(r'[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]', text))
+        english_words = len(re.findall(r'\b[a-zA-Z]+\b', text))
+        punctuation = len(re.findall(r'[^\w\s]', text))
+        
+        # 改良された計算式
+        if japanese_chars > char_count * 0.3:  # 日本語中心
+            # 日本語：1文字 ≈ 0.8-1.2トークン
+            base_tokens = japanese_chars * 1.0
+            base_tokens += english_words * 1.2  # 英単語
+            base_tokens += punctuation * 0.5    # 記号
+        else:  # 英語中心
+            # 英語：1単語 ≈ 1.3トークン、1文字 ≈ 0.25トークン
+            base_tokens = english_words * 1.3
+            base_tokens += (char_count - english_words * 5) * 0.25  # 残りの文字
+            base_tokens += punctuation * 0.5
+        
+        # 最小値保証とキャッシュ
+        token_count = max(1, int(base_tokens))
+        
+        # キャッシュ管理
+        if len(self.token_cache) > 100:
+            oldest_key = next(iter(self.token_cache))
+            del self.token_cache[oldest_key]
+        
+        self.token_cache[cache_key] = token_count
+        return token_count
+    
+    def count_tokens_fallback(self, text: str) -> int:
+        """従来の簡易計算（フォールバック用）"""
+        return len(text.split()) + len(re.findall(r'[^\w\s]', text))
     
     def count_tokens(self, text: str) -> int:
-        """テキストのトークン数を概算"""
-        return len(text.split()) + len(re.findall(r'[^\w\s]', text))
+        """テキストのトークン数を算出（メイン関数）"""
+        return self.count_tokens_accurate(text)
     
     def execute_prompt(self, prompt: str) -> Dict[str, Any]:
         """プロンプトを実行し、結果とコスト情報を返す"""
         try:
+            # 正確なトークン数算出
+            input_tokens = self.count_tokens(prompt)
+            
             response = self.model.generate_content(prompt)
             
-            input_tokens = self.count_tokens(prompt)
+            # 出力トークン数も正確に算出
             output_tokens = self.count_tokens(response.text)
             
             # 動的料金計算
@@ -185,6 +298,7 @@ class GeminiEvaluator:
                 'cost_usd': total_cost,
                 'model_name': self.model_config['name'],
                 'model_id': self.model_config['model_id'],
+                'token_accuracy': 'API-正確' if self.use_accurate_counting else '概算',
                 'success': True,
                 'error': None
             }
@@ -197,6 +311,7 @@ class GeminiEvaluator:
                 'cost_usd': 0,
                 'model_name': self.model_config['name'],
                 'model_id': self.model_config['model_id'],
+                'token_accuracy': 'エラー',
                 'success': False,
                 'error': str(e)
             }
@@ -268,25 +383,6 @@ def get_diff_html(old_text: str, new_text: str) -> str:
             html_diff.append(f'<div>{html.escape(line)}</div>')
     
     return ''.join(html_diff)
-    """2つのテキストの差分をHTMLで表示"""
-    old_lines = old_text.splitlines()
-    new_lines = new_text.splitlines()
-    
-    diff = list(difflib.unified_diff(old_lines, new_lines, lineterm=''))
-    
-    if not diff:
-        return "変更なし"
-    
-    html_diff = []
-    for line in diff[3:]:  # ヘッダー行をスキップ
-        if line.startswith('+'):
-            html_diff.append(f'<div class="diff-added">+ {html.escape(line[1:])}</div>')
-        elif line.startswith('-'):
-            html_diff.append(f'<div class="diff-removed">- {html.escape(line[1:])}</div>')
-        else:
-            html_diff.append(f'<div>{html.escape(line)}</div>')
-    
-    return ''.join(html_diff)
 
 def create_commit(data: Dict[str, Any], execution_memo: str) -> Dict[str, Any]:
     """新しい実行記録を作成"""
@@ -319,12 +415,12 @@ def main():
     with col2:
         total_executions = len(st.session_state.evaluation_history)
         st.markdown(f"**📝 総実行数:** {total_executions}")
-    
-    # Git情報表示の下に説明を追加
-    st.info("💡 Git風の履歴管理でプロンプトの改善過程を追跡できます。実行メモで変更理由を記録し、ブランチで異なるアプローチを並行テストしましょう。")
     with col3:
         total_branches = len(st.session_state.branches)
         st.markdown(f"**🌿 ブランチ数:** {total_branches}")
+    
+    # Git情報表示の下に説明を追加
+    st.info("💡 Git風の履歴管理でプロンプトの改善過程を追跡できます。実行メモで変更理由を記録し、ブランチで異なるアプローチを並行テストしましょう。")
     
     st.markdown("---")
     
@@ -350,7 +446,6 @@ def main():
         st.subheader("🤖 モデル選択")
         
         model_options = list(MODEL_CONFIGS.keys())
-        model_labels = [f"{MODEL_CONFIGS[key]['name']}" for key in model_options]
         
         selected_model_index = model_options.index(st.session_state.selected_model) if st.session_state.selected_model in model_options else 0
         
@@ -728,7 +823,8 @@ def main():
                 'evaluation_cost': evaluation_result['cost_usd'],
                 'total_cost': execution_result['cost_usd'],  # 実行コストのみ
                 'model_name': execution_result['model_name'],
-                'model_id': execution_result['model_id']
+                'model_id': execution_result['model_id'],
+                'token_accuracy': execution_result.get('token_accuracy', '不明')
             }
             
             execution_record = create_commit(execution_data, execution_memo)
@@ -738,8 +834,9 @@ def main():
             st.session_state.branches[st.session_state.current_branch].append(execution_record)
             
             # 結果表示
+            accuracy_icon = "✅" if execution_result.get('token_accuracy') == 'API-正確' else "⚠️"
             st.success(f"✅ 実行完了！使用モデル: {execution_result['model_name']}")
-            st.info(f"🔗 実行ID: `{execution_record['commit_hash']}`")
+            st.info(f"🔗 実行ID: `{execution_record['commit_hash']}` | {accuracy_icon} トークン精度: {execution_result.get('token_accuracy', '不明')}")
             st.markdown("---")
             
             # 1. LLMの回答（最優先表示）
@@ -827,6 +924,10 @@ def main():
             exec_memo = execution.get('commit_message', 'メモなし')
             branch = execution.get('branch', 'unknown')
             model_name = execution.get('model_name', 'Unknown Model')
+            token_accuracy = execution.get('token_accuracy', '不明')
+            
+            # 精度アイコン
+            accuracy_icon = "✅" if token_accuracy == 'API-正確' else "⚠️" if token_accuracy == '概算' else "❓"
             
             # タグチェック
             tags_for_execution = [tag for tag, hash_val in st.session_state.tags.items() if hash_val == exec_hash]
@@ -839,7 +940,7 @@ def main():
                         <span class="branch-tag">{branch}</span>
                         {' '.join([f'<span class="tag-label">{tag}</span>' for tag in tags_for_execution])}
                         <strong>{exec_memo}</strong>
-                        <br><small>🤖 {model_name}</small>
+                        <br><small>🤖 {model_name} | {accuracy_icon} {token_accuracy}</small>
                     </div>
                     <span class="commit-hash">{exec_hash}</span>
                 </div>
