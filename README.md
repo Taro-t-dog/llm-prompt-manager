@@ -52,14 +52,8 @@ streamlit run app.py
    - ブランチ構造の可視化
    - 使用統計とコスト情報
 
-### ブランチ管理
 
-異なるアプローチ用のブランチ作成例：
-```bash
-main                    # 本番用プロンプト
-├── experiment/creative # 創作テスト
-└── optimization/cost   # コスト最適化版
-```
+
 
 ## ファイル構造
 
