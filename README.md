@@ -57,15 +57,5 @@ streamlit run app.py
 
 MIT License 
 
-## 貢献
 
-貢献を歓迎します！プルリクエストを提出する前に貢献ガイドラインをお読みください。
 
-1. GitHub Issuesでバグ報告と機能要求
-2. GitHub Discussionsで質問とコミュニティサポート
-3. プルリクエストでコード改善を提出
-
-## サポート
-
-- GitHub Issues: バグ報告と機能要求
-- GitHub Discussions: 質問とコミュニティサポート
