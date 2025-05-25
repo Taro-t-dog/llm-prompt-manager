@@ -20,7 +20,7 @@ Git風のバージョン管理でLLMプロンプトの管理、評価、最適�
 ### インストール
 
 ```bash
-git clone https://github.com/yourusername/llm-prompt-manager.git
+git clone https://github.com/Taro-t-dog/llm-prompt-manager.git
 cd llm-prompt-manager
 pip install -r requirements.txt
 streamlit run app.py
