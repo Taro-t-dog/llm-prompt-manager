@@ -1,29 +1,10 @@
-# tabs/visualization_tab.py
+"""
+分析タブ
+ブランチ構造と統計情報を表示する機能
+"""
+
 import streamlit as st
-from core import GitManager # GitManagerをcoreからインポート
-try:
-    from core import DataManager # DataManagerをcoreからインポート
-except ImportError:
-    # DataManagerが見つからない場合は、app.pyと同様の簡易版を参照することを想定
-    # ただし、このファイルで直接定義するよりは、app.pyから渡すか、
-    # coreに確実に存在するようにするのが望ましい。
-    # ここでは、app.pyで定義されたものが利用可能であることを前提とするか、
-    # もし直接利用するなら、app.pyのDataManager定義を共有モジュールに移動することを推奨。
-    # 今回は、app.pyでDataManagerが準備されている前提で進めます。
-    # ui.pyでDataManagerを引数に取る関数があるので、それを呼び出す際に
-    # app.py側でDataManagerインスタンス（またはクラス）を渡す形になります。
-    pass 
-
-from ui import (
-    format_timestamp, # ui.py にあると仮定
-    render_statistics_summary,
-    render_detailed_statistics
-)
-
-# DataManagerの一時的なインポート回避のための措置 (app.py と同様)
-# この部分は、DataManagerが確実にcoreからインポートできるか、
-# あるいはapp.pyからこの関数に必要な形で渡されるなら不要です。
-# 現状のapp.pyの構成に合わせるため、ここにも記載しておきます。
+from core import GitManager
 try:
     from core import DataManager
 except ImportError:
@@ -31,7 +12,7 @@ except ImportError:
     import json
     import pandas as pd
     import hashlib
-    # DataManagerが見つからない場合は、簡易版を定義 (app.pyからコピー)
+    # DataManagerが見つからない場合は、簡易版を定義
     class DataManager:
         @staticmethod
         def export_to_json(include_metadata=True):
@@ -158,80 +139,74 @@ except ImportError:
             st.session_state.tags = {}
             st.session_state.current_branch = "main"
 
+from ui import (
+    format_timestamp,
+    render_statistics_summary,
+    render_detailed_statistics
+)
+
+
 def render_visualization_tab():
-    """ブランチ視覚化タブをレンダリング"""
-    st.header("🌿 ブランチ視覚化")
+    """分析タブをレンダリング"""
+    st.header("📊 プロジェクト分析")
     
     if not st.session_state.evaluation_history:
         st.info("まだ実行履歴がありません。")
         return
     
-    st.subheader("📊 ブランチ構造")
+    # 分析ダッシュボード
+    analysis_col1, analysis_col2 = st.columns([2, 1])
     
+    with analysis_col1:
+        st.subheader("🌿 ブランチ構造")
+        _render_branch_tree()
+    
+    with analysis_col2:
+        st.subheader("📈 統計サマリー")
+        global_stats = GitManager.get_global_stats()
+        data_stats = DataManager.get_data_statistics()
+        render_statistics_summary(global_stats, data_stats)
+    
+    st.markdown("---")
+    
+    # 詳細統計
+    render_detailed_statistics(data_stats, DataManager)
+
+
+def _render_branch_tree():
+    """ブランチツリーの表示"""
     branch_tree = GitManager.get_branch_tree()
     
     for branch_name, executions in branch_tree.items():
         if not executions:
             continue
-            
-        st.write(f"**🌿 {branch_name}**")
         
-        # Tree-like display using markdown and careful formatting
-        tree_str_parts = []
-        for i, execution in enumerate(executions):
-            timestamp_str = format_timestamp(execution['timestamp'])
-            # Ensure timestamp_str has enough length before slicing
-            timestamp_short = timestamp_str[5:16] if len(timestamp_str) >= 16 else timestamp_str
-            exec_hash = execution['commit_hash']
-            exec_memo = execution.get('commit_message', 'メモなし')
-            
-            tags_for_execution = GitManager.get_tags_for_commit(exec_hash)
-            
-            prefix = "├─"
-            if i == len(executions) - 1: # Last item in this branch
-                prefix = "└─"
-
-            tree_str_parts.append(f"{prefix} {exec_hash} {exec_memo} ({timestamp_short})")
-            if tags_for_execution:
-                tree_str_parts.append(f"   {'│' if i < len(executions) - 1 else ' '}  🏷️ Tags: {', '.join(tags_for_execution)}")
+        # ブランチヘッダー
+        branch_col1, branch_col2 = st.columns([3, 1])
         
-        # Join with newlines appropriate for markdown code block
-        # Need to ensure proper vertical alignment if there are no tags
-        # This simplified version might not perfectly align if some entries have tags and others don't
-        # For perfect alignment, more complex logic or HTML might be needed.
+        with branch_col1:
+            st.markdown(f"**🌿 {branch_name}**")
         
-        # Simplified approach for markdown display:
-        for i, execution in enumerate(executions):
+        with branch_col2:
+            st.markdown(f"*{len(executions)}件の実行*")
+        
+        # 実行記録をコンパクトに表示
+        for i, execution in enumerate(executions[-5:]):  # 最新5件のみ表示
             timestamp_str = format_timestamp(execution['timestamp'])
             timestamp_short = timestamp_str[5:16] if len(timestamp_str) >= 16 else timestamp_str
-            exec_hash = execution['commit_hash']
+            exec_hash = execution['commit_hash'][:8]
             exec_memo = execution.get('commit_message', 'メモなし')
-            tags_for_execution = GitManager.get_tags_for_commit(exec_hash)
-
-            connector = "│" # Default connector
-            if i == 0:
-                 # For the first element, it's cleaner without the top part of the connector
-                 pass # Using default branch title
             
-            if i < len(executions) -1 : # if not the last element
-                st.markdown(f"    {connector}") # Vertical line
+            # シンプルな表示
+            connector = "├─" if i < len(executions[-5:]) - 1 else "└─"
             
-            prefix = "├─"
-            if i == len(executions) - 1:
-                prefix = "└─"
-            
-            st.markdown(f"    {prefix} **{exec_hash}** - *{exec_memo}* ({timestamp_short})")
-            
-            if tags_for_execution:
-                tag_prefix_connector = "│" if i < len(executions) - 1 else " "
-                st.markdown(f"    {tag_prefix_connector}   🏷️ Tags: {', '.join(tags_for_execution)}")
+            st.markdown(f"""
+            <div style="font-family: monospace; color: #666; margin-left: 1rem;">
+                {connector} <code>{exec_hash}</code> {exec_memo} <small>({timestamp_short})</small>
+            </div>
+            """, unsafe_allow_html=True)
         
-        st.markdown("---") # Separator between branches
-    
-    st.subheader("📈 全体統計")
-    
-    global_stats = GitManager.get_global_stats()
-    data_stats = DataManager.get_data_statistics() # Uses the DataManager defined/imported above
-    
-    render_statistics_summary(global_stats, data_stats)
-    render_detailed_statistics(data_stats, DataManager) # Pass the DataManager class
+        if len(executions) > 5:
+            st.markdown(f"<div style='margin-left: 1rem; color: #888; font-style: italic;'>... さらに{len(executions) - 5}件</div>", unsafe_allow_html=True)
+        
+        st.markdown("---")

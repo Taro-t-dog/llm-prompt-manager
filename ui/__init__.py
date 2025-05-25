@@ -7,9 +7,9 @@ from .styles import (
     get_response_box_html, 
     get_evaluation_box_html, 
     get_metric_card_html,
+    get_header_html,
     get_commit_card_style,
-    get_branch_tag_html,
-    get_tag_label_html
+    get_branch_tag_html
 )
 
 from .components import (
@@ -36,9 +36,9 @@ __all__ = [
     'get_response_box_html',
     'get_evaluation_box_html', 
     'get_metric_card_html',
+    'get_header_html',
     'get_commit_card_style',
     'get_branch_tag_html',
-    'get_tag_label_html',
     # components
     'render_response_box',
     'render_evaluation_box',

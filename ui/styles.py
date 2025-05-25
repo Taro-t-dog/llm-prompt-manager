@@ -1,186 +1,444 @@
 """
-UIスタイル定義
+モダンで洗練されたUIスタイル定義
 """
 
 import streamlit as st
 
 
 def load_styles():
-    """アプリケーションのCSSスタイルを読み込む"""
+    """アプリケーションの洗練されたCSSスタイルを読み込む"""
     st.markdown("""
     <style>
-        .stButton > button {
-            width: 100%;
-            /* background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); */ /* 標準ボタンのスタイルは維持 */
-            /* color: white; */
-            /* border: none; */
-            /* padding: 0.75rem; */
-            /* border-radius: 8px; */
-            /* font-weight: bold; */
-            /* font-size: 1.1rem; */
-        }
-        .metric-card {
-            background: white; /* ダークテーマでは #333 などに変更検討 */
-            padding: 1rem;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            text-align: center;
-            border: 1px solid #444; /* ダークテーマ用 */
-            color: #ccc; /* ダークテーマ用 */
-        }
-        .metric-card h4 { /* metric-card内のh4の文字色 */
-            color: #ddd;
-        }
-        .metric-card h2 { /* metric-card内のh2の文字色 */
-             color: #88aaff; /* 目立つ色 */
+        /* === メインカラーパレット === */
+        :root {
+            --primary-color: #667eea;
+            --primary-dark: #5a67d8;
+            --secondary-color: #764ba2;
+            --accent-color: #f093fb;
+            --success-color: #48bb78;
+            --warning-color: #ed8936;
+            --error-color: #f56565;
+            --neutral-100: #f7fafc;
+            --neutral-200: #edf2f7;
+            --neutral-300: #e2e8f0;
+            --neutral-600: #718096;
+            --neutral-700: #4a5568;
+            --neutral-800: #2d3748;
+            --neutral-900: #1a202c;
         }
 
-        .response-box {
-            background: #2b2b2b; /* ダークテーマ用 */
-            color: #f0f0f0;     /* ダークテーマ用 */
-            padding: 2rem;
-            border-radius: 10px;
-            border-left: 4px solid #667eea;
-            margin: 1rem 0;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        /* === 全体レイアウト === */
+        .main .block-container {
+            padding-top: 2rem;
+            max-width: 1200px;
         }
-        .evaluation-box {
-            background: #2b2b2b; /* ダークテーマ用 */
-            color: #f0f0f0;     /* ダークテーマ用 */
-            padding: 2rem;
-            border-radius: 10px;
-            border-left: 4px solid #f5576c;
-            margin: 1rem 0;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+
+        /* === ボタンスタイリング === */
+        .stButton > button {
+            background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            padding: 0.75rem 1.5rem;
+            font-weight: 600;
+            font-size: 0.95rem;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.2);
         }
-        .commit-card {
-            background: #333; /* ダークテーマ用 */
-            border: 1px solid #444; /* ダークテーマ用 */
-            color: #ccc; /* ダークテーマ用 */
-            border-radius: 8px;
-            padding: 1rem;
-            margin: 0.5rem 0;
+        
+        .stButton > button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
         }
-        .commit-hash {
-            font-family: monospace;
-            color: #aaa; /* ダークテーマ用 */
+
+        /* === カードコンポーネント === */
+        .modern-card {
+            background: white;
+            border-radius: 16px;
+            padding: 1.5rem;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+            border: 1px solid var(--neutral-200);
+            transition: all 0.3s ease;
+        }
+
+        .modern-card:hover {
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.12);
+            transform: translateY(-2px);
+        }
+
+        /* === メトリクスカード === */
+        .metric-card {
+            background: linear-gradient(135deg, white 0%, var(--neutral-100) 100%);
+            padding: 1.5rem;
+            border-radius: 16px;
+            text-align: center;
+            border: 1px solid var(--neutral-200);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05);
+            transition: all 0.3s ease;
+        }
+
+        .metric-card:hover {
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+            transform: translateY(-2px);
+        }
+
+        .metric-card h4 {
+            color: var(--neutral-600);
             font-size: 0.9rem;
+            font-weight: 500;
+            margin: 0 0 0.5rem 0;
         }
+
+        .metric-card h2 {
+            color: var(--primary-color);
+            font-size: 1.8rem;
+            font-weight: 700;
+            margin: 0;
+        }
+
+        /* === レスポンス・評価ボックス === */
+        .response-box {
+            background: linear-gradient(135deg, #f8faff 0%, #f1f5ff 100%);
+            color: var(--neutral-800);
+            padding: 2rem;
+            border-radius: 16px;
+            border-left: 4px solid var(--primary-color);
+            margin: 1rem 0;
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.1);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .response-box::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, var(--primary-color), var(--accent-color));
+        }
+
+        .evaluation-box {
+            background: linear-gradient(135deg, #fff8f8 0%, #fef5f5 100%);
+            color: var(--neutral-800);
+            padding: 2rem;
+            border-radius: 16px;
+            border-left: 4px solid var(--error-color);
+            margin: 1rem 0;
+            box-shadow: 0 6px 20px rgba(245, 101, 101, 0.1);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .evaluation-box::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, var(--error-color), #fc8181);
+        }
+
+        /* === コミットカード === */
+        .commit-card {
+            background: white;
+            border: 1px solid var(--neutral-200);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin: 0.75rem 0;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+            transition: all 0.3s ease;
+            position: relative;
+        }
+
+        .commit-card:hover {
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1);
+            transform: translateY(-1px);
+        }
+
+        .commit-hash {
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+            color: var(--neutral-600);
+            font-size: 0.85rem;
+            background: var(--neutral-100);
+            padding: 0.25rem 0.5rem;
+            border-radius: 6px;
+        }
+
+        /* === タグとブランチ === */
         .branch-tag {
             display: inline-block;
-            background: #28a745;
+            background: linear-gradient(135deg, var(--success-color) 0%, #38a169 100%);
             color: white;
-            padding: 0.2rem 0.5rem;
-            border-radius: 12px;
+            padding: 0.3rem 0.8rem;
+            border-radius: 20px;
             font-size: 0.8rem;
+            font-weight: 600;
             margin-right: 0.5rem;
+            box-shadow: 0 2px 8px rgba(72, 187, 120, 0.3);
         }
-        .tag-label {
-            display: inline-block;
-            background: #ffc107;
-            color: #212529;
-            padding: 0.2rem 0.5rem;
+
+        /* === 差分表示の改善 === */
+        .diff-container-main {
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+            background: var(--neutral-900);
+            color: var(--neutral-100);
             border-radius: 12px;
-            font-size: 0.8rem;
-            margin-right: 0.5rem;
+            padding: 1.5rem;
+            margin: 1rem 0;
+            border: 1px solid var(--neutral-700);
+            overflow-x: auto;
         }
 
-        
-        .diff-added { /* これは元の汎用的な差分スタイル */
-            background: #d4edda;
-            color: #155724;
-            padding: 0.2rem;
-        }
-        .diff-removed { /* これも元の汎用的な差分スタイル */
-            background: #f8d7da;
-            color: #721c24;
-            padding: 0.2rem;
-        } /* ここで .diff-removed の定義を閉じる */
-
-        .diff-container-main { /* メインの差分コンテナ */
-            font-family: monospace;
-            white-space: pre-wrap;
-            line-height: 1.5em;
-            font-size: 0.9em;
-            border: 1px solid #444;
-            border-radius: 6px;
-            padding: 10px;
-            background-color: #1e1e1e;
-            color: #d4d4d4;
-            margin-bottom: 1em;
-        }
-
-        /* 行レベルの差分 (unified_diff風) */
         .diff-line-added {
-            background-color: rgba(0, 100, 0, 0.2); /* 暗めの緑背景 */
-            color: #90ee90; /* 明るい緑の文字 */
-            display: block;
+            background: rgba(72, 187, 120, 0.2);
+            color: #9ae6b4;
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            margin: 0.1rem 0;
         }
+
         .diff-line-removed {
-            background-color: rgba(100, 0, 0, 0.2); /* 暗めの赤背景 */
-            color: #ff7f7f; /* 明るい赤の文字 */
-            display: block;
-        }
-        .diff-context-line { /* 変更のない行 */
-            color: #9e9e9e;
-            display: block;
+            background: rgba(245, 101, 101, 0.2);
+            color: #feb2b2;
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            margin: 0.1rem 0;
         }
 
-        /* 文字レベルの差分ハイライト用 */
-        .diff-line-added-char, .diff-line-removed-char { /* 文字差分を含む行の基本スタイル */
-             display: block; /* 行として表示 */
-        }
         .diff-char-added {
-            background-color: darkgreen; /* 文字の背景を濃い緑に */
+            background: var(--success-color);
             color: white;
-            font-weight: bold;
-            padding: 0 1px; /* 少しパディング */
-            border-radius: 2px;
-        }
-        .diff-char-removed {
-            background-color: darkred; /* 文字の背景を濃い赤に */
-            color: #ffcccc; /* 文字色を少し明るく */
-            text-decoration: line-through;
-            font-weight: bold;
-            padding: 0 1px;
-            border-radius: 2px;
+            font-weight: 600;
+            padding: 0 0.2rem;
+            border-radius: 3px;
         }
 
-        /* 差分がない場合などのメッセージ用 */
-        .diff-no-change { color: #4CAF50; font-style: italic; }
-        .diff-subtle-change { color: #FFC107; font-style: italic; }
-        .diff-subtle-change pre {
-            background-color: #2a2a2a; padding: 5px;
-            border: 1px dashed #555; margin-top: 5px; color: #ccc;
+        .diff-char-removed {
+            background: var(--error-color);
+            color: white;
+            text-decoration: line-through;
+            font-weight: 600;
+            padding: 0 0.2rem;
+            border-radius: 3px;
+        }
+
+        /* === サイドバーの改善 === */
+        .css-1d391kg {
+            background: linear-gradient(180deg, #f8faff 0%, white 100%);
+        }
+
+        /* === セレクトボックスの改善 === */
+        .stSelectbox > div > div {
+            border-radius: 10px;
+            border: 2px solid var(--neutral-200);
+            transition: all 0.3s ease;
+        }
+
+        .stSelectbox > div > div:focus-within {
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        /* === テキストエリアの改善 === */
+        .stTextArea > div > div > textarea {
+            border-radius: 10px;
+            border: 2px solid var(--neutral-200);
+            transition: all 0.3s ease;
+        }
+
+        .stTextArea > div > div > textarea:focus {
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        /* === タブコンテンツの改善 === */
+        .stTabs [data-baseweb="tab-panel"] {
+            padding-top: 1.5rem;
+        }
+
+        /* === タブリストのコンテナ === */
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 12px;
+            padding: 0 1rem;
+            margin-bottom: 1rem;
+            background: transparent;
+        }
+
+        .stTabs [data-baseweb="tab"] {
+            border-radius: 12px;
+            background: var(--neutral-100);
+            border: none;
+            font-weight: 600;
+            font-size: 1rem;
+            padding: 0.75rem 1.5rem !important;
+            min-width: 120px;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+            flex-grow: 1;
+            text-align: center;
+        }
+
+        .stTabs [data-baseweb="tab"]:hover {
+            background: var(--neutral-200);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+
+        .stTabs [aria-selected="true"] {
+            background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%);
+            color: white;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+        }
+
+        .stTabs [aria-selected="true"]:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        /* === アラートとメッセージ === */
+        .stAlert {
+            border-radius: 12px;
+            border: none;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        /* === ヘッダーの改善 === */
+        .main-header {
+            background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%);
+            color: white;
+            padding: 2rem;
+            border-radius: 16px;
+            margin-bottom: 2rem;
+            text-align: center;
+            box-shadow: 0 8px 30px rgba(102, 126, 234, 0.2);
+        }
+
+        .header-stats {
+            display: flex;
+            justify-content: space-around;
+            margin-top: 1rem;
+        }
+
+        .header-stat {
+            text-align: center;
+        }
+
+        .header-stat h3 {
+            margin: 0;
+            font-size: 1.5rem;
+            font-weight: 700;
+        }
+
+        .header-stat p {
+            margin: 0;
+            opacity: 0.9;
+            font-size: 0.9rem;
+        }
+
+        /* === レスポンシブデザイン === */
+        @media (max-width: 768px) {
+            .main .block-container {
+                padding-left: 1rem;
+                padding-right: 1rem;
+            }
+            
+            .modern-card, .metric-card, .commit-card {
+                margin: 0.5rem 0;
+            }
+            
+            .header-stats {
+                flex-direction: column;
+                gap: 1rem;
+            }
+        }
+
+        /* === アニメーション === */
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .fade-in-up {
+            animation: fadeInUp 0.6s ease-out;
+        }
+
+        /* === ローディング状態 === */
+        .stSpinner > div {
+            border-color: var(--primary-color) transparent transparent transparent;
+        }
+
+        /* === フォーカス状態の改善 === */
+        *:focus {
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.2);
         }
     </style>
     """, unsafe_allow_html=True)
 
 
-def get_response_box_html(content: str, border_color: str = "#667eea") -> str:
-    """レスポンスボックスのHTMLを生成"""
+def get_response_box_html(content: str, border_color: str = None) -> str:
+    """モダンなレスポンスボックスのHTMLを生成"""
     import html
     escaped_content = html.escape(content).replace('\n', '<br>')
     return f"""
-    <div style="background: #ffffff; color: #2c3e50; padding: 2rem; border-radius: 10px; border-left: 4px solid {border_color}; margin: 1rem 0; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
-        <p style="color: #2c3e50; line-height: 1.6; margin: 0;">{escaped_content}</p>
+    <div class="response-box fade-in-up">
+        <p style="line-height: 1.6; margin: 0; font-size: 1rem;">{escaped_content}</p>
     </div>
     """
 
 
 def get_evaluation_box_html(content: str) -> str:
-    """評価ボックスのHTMLを生成"""
-    return get_response_box_html(content, "#f5576c")
+    """モダンな評価ボックスのHTMLを生成"""
+    import html
+    escaped_content = html.escape(content).replace('\n', '<br>')
+    return f"""
+    <div class="evaluation-box fade-in-up">
+        <p style="line-height: 1.6; margin: 0; font-size: 1rem;">{escaped_content}</p>
+    </div>
+    """
 
 
 def get_metric_card_html(title: str, value: str, subtitle: str = "") -> str:
-    """メトリクスカードのHTMLを生成"""
-    subtitle_html = f'<p style="color: #666; margin: 0;">{subtitle}</p>' if subtitle else ""
+    """モダンなメトリクスカードのHTMLを生成"""
+    subtitle_html = f'<p style="color: var(--neutral-600); margin: 0.5rem 0 0 0; font-size: 0.85rem;">{subtitle}</p>' if subtitle else ""
     return f"""
-    <div style="background: #ffffff; color: #2c3e50; padding: 1rem; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); text-align: center; border: 1px solid #e0e0e0;">
-        <h4 style="color: #2c3e50; margin: 0 0 0.5rem 0;">{title}</h4>
-        <h2 style="color: #667eea; margin: 0.5rem 0;">{value}</h2>
+    <div class="metric-card">
+        <h4>{title}</h4>
+        <h2>{value}</h2>
         {subtitle_html}
+    </div>
+    """
+
+
+def get_header_html(title: str, stats: dict) -> str:
+    """メインヘッダーのHTMLを生成"""
+    return f"""
+    <div class="main-header">
+        <h1 style="margin: 0; font-size: 2.5rem; font-weight: 800;">{title}</h1>
+        <p style="margin: 0.5rem 0 0 0; opacity: 0.9; font-size: 1.1rem;">Git風バージョン管理でプロンプトを進化させよう</p>
+        <div class="header-stats">
+            <div class="header-stat">
+                <h3>{stats.get('total_executions', 0)}</h3>
+                <p>実行記録</p>
+            </div>
+            <div class="header-stat">
+                <h3>{stats.get('total_branches', 0)}</h3>
+                <p>ブランチ</p>
+            </div>
+            <div class="header-stat">
+                <h3>${stats.get('total_cost', 0):.4f}</h3>
+                <p>総コスト</p>
+            </div>
+        </div>
     </div>
     """
 
@@ -193,8 +451,3 @@ def get_commit_card_style():
 def get_branch_tag_html(branch_name: str) -> str:
     """ブランチタグのHTMLを生成"""
     return f'<span class="branch-tag">{branch_name}</span>'
-
-
-def get_tag_label_html(tag_name: str) -> str:
-    """タグラベルのHTMLを生成"""
-    return f'<span class="tag-label">{tag_name}</span>'

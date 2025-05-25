@@ -13,10 +13,10 @@ from config import MODEL_CONFIGS, get_model_config, get_model_options, get_model
 from core import GeminiEvaluator, GitManager, DataManager
 from ui import (
     load_styles, get_response_box_html, get_evaluation_box_html, get_metric_card_html,
-    render_response_box, render_evaluation_box, render_cost_metrics, render_execution_card,
-    render_comparison_metrics, render_comparison_responses, render_comparison_evaluations,
-    render_export_section, render_import_section, render_statistics_summary,
-    render_detailed_statistics, format_timestamp
+    get_header_html, render_response_box, render_evaluation_box, render_cost_metrics, 
+    render_execution_card, render_comparison_metrics, render_comparison_responses, 
+    render_comparison_evaluations, render_export_section, render_import_section, 
+    render_statistics_summary, render_detailed_statistics, format_timestamp
 )
 
 from ui.tabs import (
@@ -24,9 +24,7 @@ from ui.tabs import (
     render_history_tab,
     render_comparison_tab,
     render_visualization_tab
-
 )
-
 
 # DataManagerの一時的なインポート回避
 try:
@@ -161,10 +159,10 @@ except ImportError:
 
 # ページ設定
 st.set_page_config(
-    page_title="LLMプロンプト自動評価システム",
+    page_title="LLM Prompt Manager",
     page_icon="🚀",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"  # サイドバーを最初は閉じる
 )
 
 # スタイル読み込み
@@ -177,52 +175,37 @@ if 'api_key' not in st.session_state:
 if 'selected_model' not in st.session_state:
     st.session_state.selected_model = "gemini-2.0-flash-exp"
 
-def format_timestamp(timestamp):
-    """タイムスタンプをフォーマット"""
-    if isinstance(timestamp, str):
-        if 'T' in timestamp:
-            try:
-                dt = datetime.datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
-                return dt.strftime('%Y-%m-%d %H:%M:%S')
-            except:
-                return timestamp[:19]
-        return timestamp
-    else:
-        return timestamp.strftime('%Y-%m-%d %H:%M:%S')
-
-def get_diff_html(old_text: str, new_text: str) -> str:
-    """2つのテキストの差分をHTMLで表示"""
-    old_lines = old_text.splitlines()
-    new_lines = new_text.splitlines()
+def render_streamlined_sidebar():
+    """簡潔なサイドバー"""
+    st.header("⚙️ 設定")
     
-    diff = list(difflib.unified_diff(old_lines, new_lines, lineterm=''))
+    # API Key
+    api_key = st.text_input(
+        "🔑 API Key", 
+        value=st.session_state.api_key,
+        type="password"
+    )
     
-    if not diff:
-        return "変更なし"
+    if api_key != st.session_state.api_key:
+        st.session_state.api_key = api_key
     
-    html_diff = []
-    for line in diff[3:]:
-        if line.startswith('+'):
-            html_diff.append(f'<div class="diff-added">+ {html.escape(line[1:])}</div>')
-        elif line.startswith('-'):
-            html_diff.append(f'<div class="diff-removed">- {html.escape(line[1:])}</div>')
-        else:
-            html_diff.append(f'<div>{html.escape(line)}</div>')
+    if not api_key:
+        st.error("APIキーが必要です")
+        st.markdown("[APIキーを取得 →](https://makersuite.google.com/app/apikey)")
+        return  # st.stop()の代わりにreturnを使用
     
-    return ''.join(html_diff)
-
-def render_model_selection_sidebar():
-    """サイドバーのモデル選択部分をレンダリング"""
-    st.subheader("🤖 モデル選択")
+    # モデル選択
+    st.subheader("🤖 モデル")
     
     model_options = get_model_options()
     selected_model_index = model_options.index(st.session_state.selected_model) if st.session_state.selected_model in model_options else 0
     
     selected_model = st.selectbox(
-        "使用するモデル",
+        "モデルを選択",
         model_options,
         format_func=lambda x: MODEL_CONFIGS[x]['name'],
-        index=selected_model_index
+        index=selected_model_index,
+        label_visibility="collapsed"
     )
     
     if selected_model != st.session_state.selected_model:
@@ -230,172 +213,125 @@ def render_model_selection_sidebar():
     
     current_model = get_model_config(st.session_state.selected_model)
     
-    st.markdown(f"""
-    **📋 モデル詳細:**
-    - **名前**: {current_model['name']}
-    - **説明**: {current_model['description']}
-    - **コンテキスト**: {current_model['context_window']:,} tokens
-    - **無料枠**: {'✅ あり' if current_model['free_tier'] else '❌ なし'}
-    """)
-    
     if is_free_model(st.session_state.selected_model):
-        st.success("💰 **完全無料!**")
+        st.success("💰 無料")
     else:
-        st.markdown(f"""
-        **💰 料金:**
-        - 入力: ${current_model['input_cost_per_token'] * 1000000:.2f}/1M tokens
-        - 出力: ${current_model['output_cost_per_token'] * 1000000:.2f}/1M tokens
-        """)
-
-def render_data_management_sidebar():
-    """サイドバーのデータ管理部分をレンダリング（componentsを使用）"""
-    st.header("💾 データ管理")
+        st.info(f"💰 ${current_model['input_cost_per_token'] * 1000000:.2f}/1M tokens")
     
-    if st.session_state.evaluation_history:
-        render_export_section(DataManager)
-    
-    render_import_section(DataManager)
-    
+    # 統計情報
     if st.session_state.evaluation_history:
         st.markdown("---")
-        st.subheader("🗑️ データ管理")
+        st.subheader("📊 統計")
         
-        if st.button("🗑️ 全データクリア", type="secondary"):
-            if st.button("⚠️ 本当にクリアしますか？", type="secondary"):
-                DataManager.clear_all_data()
-                st.success("✅ データをクリアしました")
-                st.rerun()
-
-def render_git_operations_sidebar():
-    """サイドバーのGit操作部分をレンダリング"""
-    st.header("🌿 ブランチ管理")
-    
-    available_branches = GitManager.get_all_branches()
-    current_branch = GitManager.get_current_branch()
-    current_branch_index = available_branches.index(current_branch) if current_branch in available_branches else 0
-    
-    selected_branch = st.selectbox(
-        "ブランチを選択",
-        available_branches,
-        index=current_branch_index
-    )
-    
-    if selected_branch != current_branch:
-        if GitManager.switch_branch(selected_branch):
-            st.rerun()
-    
-    new_branch_name = st.text_input("新しいブランチ名")
-    if st.button("🌱 ブランチ作成"):
-        if new_branch_name:
-            if GitManager.create_branch(new_branch_name):
-                if GitManager.switch_branch(new_branch_name):
-                    st.success(f"ブランチ '{new_branch_name}' を作成し、切り替えました")
-                    st.rerun()
-            else:
-                st.error("同名のブランチが既に存在します")
-        else:
-            st.warning("ブランチ名を入力してください")
-
-def render_tag_management_sidebar():
-    """サイドバーのタグ管理部分をレンダリング"""
-    st.header("🏷️ タグ管理")
-    
-    if st.session_state.evaluation_history:
-        execution_options = [f"{execution['commit_hash']} - {execution.get('commit_message', 'メモなし')}" 
-                        for execution in st.session_state.evaluation_history]
-        
-        selected_execution_idx = st.selectbox("タグを付ける実行記録", 
-                                         range(len(execution_options)), 
-                                         format_func=lambda x: execution_options[x])
-        
-        tag_name = st.text_input("タグ名")
-        if st.button("🏷️ タグ作成"):
-            if tag_name:
-                exec_hash = st.session_state.evaluation_history[selected_execution_idx]['commit_hash']
-                if GitManager.create_tag(tag_name, exec_hash):
-                    st.success(f"タグ '{tag_name}' を作成しました")
-                else:
-                    st.error("同名のタグが既に存在するか、コミットが見つかりません")
-
-def render_statistics_sidebar():
-    """サイドバーの統計情報部分をレンダリング"""
-    if st.session_state.evaluation_history:
-        st.header("📊 統計情報")
-        
+        global_stats = GitManager.get_global_stats()
         branch_stats = GitManager.get_branch_stats()
         
-        st.metric("ブランチ内実行数", branch_stats['execution_count'])
-        st.metric("ブランチ内実行コスト", f"${branch_stats['total_cost']:.6f}")
-        st.metric("ブランチ内総トークン", f"{branch_stats['total_tokens']:,}")
+        st.metric("実行数", global_stats['total_executions'])
+        st.metric("コスト", f"${global_stats['total_cost']:.4f}")
         
-        if st.checkbox("🌐 詳細統計を表示"):
-            data_stats = DataManager.get_data_statistics()
-            global_stats = GitManager.get_global_stats()
-            
-            st.metric("総実行数", global_stats['total_executions'])
-            st.metric("総ブランチ数", global_stats['total_branches'])
-            st.metric("総タグ数", global_stats['total_tags'])
-            
-            if data_stats['models_used']:
-                st.write("**使用モデル統計:**")
-                for model, count in data_stats['models_used'].items():
-                    st.write(f"- {model}: {count}回")
+        # データ管理
+        st.markdown("---")
+        st.subheader("💾 データ")
+        
+        export_col1, export_col2 = st.columns(2)
+        
+        with export_col1:
+            if st.button("📤 JSON", use_container_width=True):
+                json_data = DataManager.export_to_json()
+                filename = DataManager.get_file_suggestion("json")
+                st.download_button(
+                    "📥 DL",
+                    json_data,
+                    filename,
+                    "application/json",
+                    key="json_dl"
+                )
+        
+        with export_col2:
+            if st.button("📊 CSV", use_container_width=True):
+                csv_data = DataManager.export_to_csv()
+                filename = DataManager.get_file_suggestion("csv")
+                st.download_button(
+                    "📥 DL",
+                    csv_data,
+                    filename,
+                    "text/csv",
+                    key="csv_dl"
+                )
+        
+        # インポート
+        uploaded_file = st.file_uploader("📂 インポート", type=["json", "csv"])
+        if uploaded_file:
+            if st.button("⬆️ インポート"):
+                try:
+                    if uploaded_file.name.endswith('.json'):
+                        data = json.load(uploaded_file)
+                        result = DataManager.import_from_json(data)
+                    else:
+                        df = pd.read_csv(uploaded_file)
+                        result = DataManager.import_from_csv(df)
+                    
+                    if result['success']:
+                        st.success(f"✅ {result['imported_count']}件")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {result['error']}")
+                except Exception as e:
+                    st.error(f"❌ {str(e)}")
 
-
-def main():
-    st.title("🚀 LLM プロンプト Git 管理システム")
-    st.markdown("Git風のバージョン管理でプロンプトの進化を追跡しましょう！")
+def render_git_controls():
+    """メイン画面のGit操作パネル"""
+    st.subheader("🌿 ブランチ管理")
     
-    header_col1, header_col2, header_col3 = st.columns([2, 1, 1])
-    with header_col1:
+    git_col1, git_col2 = st.columns(2)
+    
+    with git_col1:
+        st.write("**現在のブランチ**")
+        available_branches = GitManager.get_all_branches()
         current_branch = GitManager.get_current_branch()
-        st.markdown(f"**📍 現在のブランチ:** `{current_branch}`")
-    with header_col2:
-        global_stats = GitManager.get_global_stats()
-        st.markdown(f"**📝 総実行数:** {global_stats['total_executions']}")
-    with header_col3:
-        st.markdown(f"**🌿 ブランチ数:** {global_stats['total_branches']}")
-    
-    st.info("💡 Git風の履歴管理でプロンプトの改善過程を追跡できます。実行メモで変更理由を記録し、ブランチで異なるアプローチを並行テストしましょう。")
-    
-    st.markdown("---")
-    
-    with st.sidebar:
-        st.header("⚙️ 設定")
+        current_branch_index = available_branches.index(current_branch) if current_branch in available_branches else 0
         
-        api_key = st.text_input(
-            "🔑 Gemini API Key", 
-            value=st.session_state.api_key,
-            type="password",
-            help="Google AI StudioでAPIキーを取得してください"
+        selected_branch = st.selectbox(
+            "ブランチ",
+            available_branches,
+            index=current_branch_index,
+            label_visibility="collapsed"
         )
         
-        if api_key != st.session_state.api_key:
-            st.session_state.api_key = api_key
-        
-        if not api_key:
-            st.error("⚠️ APIキーを入力してください")
-            st.stop()
-        
-        render_model_selection_sidebar()
-        
-        st.markdown("---")
-        
-        render_data_management_sidebar()
-        
-        st.markdown("---")
-        
-        render_git_operations_sidebar()
-        
-        st.markdown("---")
-        
-        render_tag_management_sidebar()
-        
-        st.markdown("---")
-        
-        render_statistics_sidebar()
+        if selected_branch != current_branch:
+            if GitManager.switch_branch(selected_branch):
+                st.rerun()
     
-    tab1, tab2, tab3, tab4 = st.tabs(["🚀 新規実行", "📋 実行履歴", "🔍 結果比較", "🌿 ブランチ視覚化"])
+    with git_col2:
+        st.write("**新しいブランチ**")
+        new_branch_name = st.text_input("ブランチ名", label_visibility="collapsed")
+        if st.button("🌱 作成", use_container_width=True):
+            if new_branch_name and GitManager.create_branch(new_branch_name):
+                if GitManager.switch_branch(new_branch_name):
+                    st.success(f"ブランチ '{new_branch_name}' を作成")
+                    st.rerun()
+
+def main():
+    # ヘッダー
+    global_stats = GitManager.get_global_stats()
+    st.markdown(get_header_html("🚀 LLM Prompt Manager", global_stats), unsafe_allow_html=True)
+    
+    # サイドバー
+    with st.sidebar:
+        render_streamlined_sidebar()
+    
+    # APIキーチェック
+    if not st.session_state.api_key:
+        st.warning("⚠️ APIキーを設定してからお使いください")
+        return
+    
+    # Git管理パネル
+    if st.session_state.evaluation_history:
+        render_git_controls()
+        st.markdown("---")
+    
+    # メインタブ
+    tab1, tab2, tab3, tab4 = st.tabs(["🚀 実行", "📋 履歴", "🔍 比較", "📊 分析"])
     
     with tab1:
         render_execution_tab()

@@ -1,112 +1,137 @@
 """
-実行履歴タブ
-過去の実行記録を表示・管理する機能
+改善された実行履歴タブ
 """
 
 import streamlit as st
 from core import GitManager
 from ui.components import render_execution_card
 
-# DataManagerのインポート（一時的な回避策対応）
-try:
-    from core import DataManager
-except ImportError:
-    # 簡易版DataManagerを使用
-    class DataManager:
-        @staticmethod
-        def export_to_csv():
-            if not st.session_state.evaluation_history:
-                return ""
-            import pandas as pd
-            df = pd.DataFrame(st.session_state.evaluation_history)
-            if 'timestamp' in df.columns:
-                df['timestamp'] = df['timestamp'].apply(
-                    lambda x: x.isoformat() if hasattr(x, 'isoformat') else str(x)
-                )
-            return df.to_csv(index=False, encoding='utf-8-sig')
-        
-        @staticmethod
-        def get_file_suggestion(file_type="csv"):
-            import datetime
-            timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-            record_count = len(st.session_state.evaluation_history)
-            return f"prompt_execution_history_{timestamp}_{record_count}records.csv"
-
 
 def render_history_tab():
-    """実行履歴タブをレンダリング"""
-    st.header("📋 実行履歴")
+    """改善された履歴タブ"""
+    # ヘッダー
+    header_col1, header_col2, header_col3 = st.columns([2, 1, 1])
     
-    # フィルターとエクスポート
-    _render_filter_and_export_section()
+    with header_col1:
+        st.markdown("### 📋 実行履歴")
     
-    # 実行記録の表示
-    executions_to_show = _get_executions_to_show()
+    with header_col2:
+        show_all_branches = st.checkbox("全ブランチ", value=False)
+    
+    with header_col3:
+        current_branch = GitManager.get_current_branch()
+        st.markdown(f"**現在:** `{current_branch}`")
+    
+    # 実行記録取得
+    executions_to_show = _get_executions_to_show(show_all_branches)
     
     if not executions_to_show:
-        st.info("まだ実行履歴がありません。「新規実行」タブでプロンプトを実行してください。")
+        st.info("実行履歴がありません。「実行」タブでプロンプトを実行してください。")
         return
     
-    st.markdown("---")
+    # フィルターと検索
+    filtered_executions = _render_filters_and_search(executions_to_show)
     
-    # 実行記録の表示
-    _display_execution_records(executions_to_show)
+    # ページネーション
+    _render_paginated_executions(filtered_executions)
 
 
-def _render_filter_and_export_section():
-    """フィルターとエクスポートセクションをレンダリング"""
-    filter_col1, filter_col2 = st.columns([3, 1])
-    
-    with filter_col1:
-        show_all_branches = st.checkbox("全ブランチ表示", value=False)
-        # セッション状態に保存
-        st.session_state.show_all_branches = show_all_branches
-    
-    with filter_col2:
-        if st.button("📥 履歴エクスポート"):
-            csv_data = DataManager.export_to_csv()
-            filename = DataManager.get_file_suggestion("csv")
-            st.download_button(
-                label="CSV ダウンロード",
-                data=csv_data,
-                file_name=filename,
-                mime="text/csv"
-            )
-
-
-def _get_executions_to_show():
+def _get_executions_to_show(show_all_branches: bool):
     """表示する実行記録を取得"""
-    show_all_branches = getattr(st.session_state, 'show_all_branches', False)
-    
     if show_all_branches:
         return st.session_state.evaluation_history
     else:
         return GitManager.get_branch_executions()
 
 
-def _display_execution_records(executions_to_show):
-    """実行記録を表示"""
-    # 検索・フィルター機能
-    search_options = _render_search_options()
+def _render_filters_and_search(executions_to_show):
+    """フィルターと検索"""
+    filter_col1, filter_col2, filter_col3 = st.columns([2, 1, 1])
+    
+    with filter_col1:
+        search_text = st.text_input(
+            "🔍 検索",
+            placeholder="メッセージ、プロンプト、回答で検索...",
+            key="search_text"
+        )
+    
+    with filter_col2:
+        # モデルフィルター
+        all_models = list(set([
+            execution.get('model_name', 'Unknown') 
+            for execution in executions_to_show
+        ]))
+        selected_model = st.selectbox(
+            "🤖 モデル",
+            ['すべて'] + all_models,
+            key="model_filter"
+        )
+    
+    with filter_col3:
+        # ソート
+        sort_options = {
+            "新しい順": lambda x: x.get('timestamp', ''),
+            "古い順": lambda x: x.get('timestamp', ''),
+            "コスト高": lambda x: x.get('execution_cost', 0),
+            "コスト低": lambda x: x.get('execution_cost', 0)
+        }
+        
+        sort_method = st.selectbox(
+            "📊 並び順",
+            list(sort_options.keys()),
+            key="sort_method"
+        )
     
     # フィルター適用
-    filtered_executions = _apply_filters(executions_to_show, search_options)
+    filtered = executions_to_show.copy()
+    
+    # テキスト検索
+    if search_text:
+        search_lower = search_text.lower()
+        filtered = [
+            exec for exec in filtered
+            if (search_lower in exec.get('commit_message', '').lower() or
+                search_lower in exec.get('final_prompt', '').lower() or
+                search_lower in exec.get('response', '').lower())
+        ]
+    
+    # モデルフィルター
+    if selected_model != 'すべて':
+        filtered = [
+            exec for exec in filtered
+            if exec.get('model_name', 'Unknown') == selected_model
+        ]
+    
+    # ソート
+    reverse_sort = sort_method in ["新しい順", "コスト高"]
+    filtered.sort(key=sort_options[sort_method], reverse=reverse_sort)
+    
+    return filtered
+
+
+def _render_paginated_executions(filtered_executions):
+    """ページネーション付き実行記録表示"""
+    total_executions = len(filtered_executions)
+    
+    if total_executions == 0:
+        st.info("検索条件に合う実行記録が見つかりません。")
+        return
     
     # ページネーション設定
-    executions_per_page = st.selectbox(
-        "1ページあたりの表示数",
-        [5, 10, 20, 50],
-        index=1,  # デフォルト10件
-        key="pagination_size"
-    )
+    pagination_col1, pagination_col2, pagination_col3 = st.columns([1, 2, 1])
     
-    # ページネーション実装
-    total_executions = len(filtered_executions)
-    total_pages = (total_executions - 1) // executions_per_page + 1 if total_executions > 0 else 1
+    with pagination_col1:
+        page_size = st.selectbox(
+            "表示数",
+            [5, 10, 20, 50],
+            index=1,
+            key="page_size"
+        )
     
-    if total_pages > 1:
-        page_col1, page_col2, page_col3 = st.columns([1, 2, 1])
-        with page_col2:
+    with pagination_col2:
+        total_pages = (total_executions - 1) // page_size + 1 if total_executions > 0 else 1
+        
+        if total_pages > 1:
             current_page = st.number_input(
                 f"ページ (1-{total_pages})",
                 min_value=1,
@@ -114,113 +139,87 @@ def _display_execution_records(executions_to_show):
                 value=1,
                 key="current_page"
             )
-    else:
-        current_page = 1
+        else:
+            current_page = 1
     
-    # 表示範囲の計算
-    start_idx = (current_page - 1) * executions_per_page
-    end_idx = min(start_idx + executions_per_page, total_executions)
+    with pagination_col3:
+        st.metric("件数", total_executions)
     
-    # ページ情報表示
-    if total_executions > executions_per_page:
-        st.info(f"📄 {start_idx + 1}-{end_idx}件目を表示 (全{total_executions}件、{total_pages}ページ)")
+    # 表示範囲計算
+    start_idx = (current_page - 1) * page_size
+    end_idx = min(start_idx + page_size, total_executions)
     
-    # 実行記録の表示
-    page_executions = list(reversed(filtered_executions))[start_idx:end_idx]
+    # ページ情報
+    if total_executions > page_size:
+        st.markdown(f"**{start_idx + 1}-{end_idx}件目** (全{total_executions}件)")
     
-    for execution in page_executions:
-        render_execution_card(execution, show_details=True)
-        st.markdown("---")
-
-
-def _render_search_options():
-    """検索・フィルターオプションをレンダリング"""
-    with st.expander("🔍 検索・フィルター"):
-        search_col1, search_col2 = st.columns(2)
+    st.markdown("---")
+    
+    # 実行記録表示
+    page_executions = filtered_executions[start_idx:end_idx]
+    
+    for i, execution in enumerate(page_executions):
+        render_execution_card(execution, show_details=False)
         
-        with search_col1:
-            # テキスト検索
-            search_text = st.text_input(
-                "🔍 テキスト検索",
-                placeholder="コミットメッセージ、プロンプト、回答で検索...",
-                key="search_text"
-            )
-            
-            # ブランチフィルター
-            all_branches = list(st.session_state.branches.keys())
-            selected_branches = st.multiselect(
-                "🌿 ブランチフィルター",
-                all_branches,
-                default=all_branches,
-                key="branch_filter"
-            )
+        # 詳細表示の展開
+        if st.expander(f"📋 詳細 - {execution['commit_hash'][:8]}", expanded=False):
+            _render_execution_details(execution)
         
-        with search_col2:
-            # モデルフィルター
-            all_models = list(set([
-                execution.get('model_name', 'Unknown') 
-                for execution in st.session_state.evaluation_history
-            ]))
-            selected_models = st.multiselect(
-                "🤖 モデルフィルター",
-                all_models,
-                default=all_models,
-                key="model_filter"
-            )
-            
-            # 日付範囲フィルター
-            date_range = st.date_input(
-                "📅 実行日フィルター",
-                value=(),
-                key="date_filter"
-            )
-    
-    return {
-        'search_text': search_text,
-        'selected_branches': selected_branches,
-        'selected_models': selected_models,
-        'date_range': date_range
-    }
+        if i < len(page_executions) - 1:  # 最後以外に区切り線
+            st.markdown("---")
 
 
-def _apply_filters(executions, search_options):
-    """フィルターを適用"""
-    filtered = executions.copy()
+def _render_execution_details(execution):
+    """実行記録の詳細表示"""
+    detail_col1, detail_col2 = st.columns([2, 1])
     
-    # テキスト検索
-    if search_options['search_text']:
-        search_text = search_options['search_text'].lower()
-        filtered = [
-            exec for exec in filtered
-            if (search_text in exec.get('commit_message', '').lower() or
-                search_text in exec.get('final_prompt', '').lower() or
-                search_text in exec.get('response', '').lower())
-        ]
+    with detail_col1:
+        # プロンプトと回答
+        with st.expander("📝 プロンプト", expanded=True):
+            if execution.get('execution_mode') == "テンプレート + データ入力":
+                st.markdown("**テンプレート:**")
+                st.code(execution.get('prompt_template', ''), language=None)
+                st.markdown("**データ:**")
+                st.code(execution.get('user_input', ''), language=None)
+                st.markdown("**最終プロンプト:**")
+            st.code(execution.get('final_prompt', ''), language=None)
+        
+        with st.expander("🤖 回答", expanded=True):
+            st.markdown(execution.get('response', ''))
+        
+        with st.expander("⭐ 評価", expanded=False):
+            st.markdown("**評価基準:**")
+            st.code(execution.get('criteria', ''), language=None)
+            st.markdown("**評価結果:**")
+            st.markdown(execution.get('evaluation', ''))
     
-    # ブランチフィルター
-    if search_options['selected_branches']:
-        filtered = [
-            exec for exec in filtered
-            if exec.get('branch', 'unknown') in search_options['selected_branches']
-        ]
-    
-    # モデルフィルター
-    if search_options['selected_models']:
-        filtered = [
-            exec for exec in filtered
-            if exec.get('model_name', 'Unknown') in search_options['selected_models']
-        ]
-    
-    # 日付フィルター
-    if search_options['date_range']:
-        if len(search_options['date_range']) == 2:
-            start_date, end_date = search_options['date_range']
-            filtered = [
-                exec for exec in filtered
-                if _is_execution_in_date_range(exec, start_date, end_date)
-            ]
-    
-    return filtered
+    with detail_col2:
+        # メタデータ
+        st.markdown("### 📊 詳細情報")
+        
+        # 基本情報
+        st.markdown(f"""
+        **ID:** `{execution['commit_hash']}`  
+        **ブランチ:** `{execution.get('branch', 'unknown')}`  
+        **モデル:** {execution.get('model_name', 'Unknown')}  
+        **実行時刻:** {execution.get('timestamp', 'Unknown')}
+        """)
+        
+        # メトリクス
+        st.markdown("### 💰 コスト・トークン")
+        st.metric("実行トークン", f"{execution.get('execution_tokens', 0):,}")
+        st.metric("評価トークン", f"{execution.get('evaluation_tokens', 0):,}")
+        st.metric("実行コスト", f"${execution.get('execution_cost', 0):.6f}")
+        st.metric("評価コスト", f"${execution.get('evaluation_cost', 0):.6f}")
+        
+        total_cost = execution.get('execution_cost', 0) + execution.get('evaluation_cost', 0)
+        st.metric("総コスト", f"${total_cost:.6f}")
+        
+        # アクション
+        st.markdown("### 🔧 アクション")
+        
+        if st.button("📋 プロンプトをコピー", key=f"copy_{execution['commit_hash']}", use_container_width=True):
+            st.code(execution.get('final_prompt', ''), language=None)
 
 
 def _is_execution_in_date_range(execution, start_date, end_date):
