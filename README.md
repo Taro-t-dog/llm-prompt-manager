@@ -55,7 +55,7 @@ streamlit run app.py
 
 ## ライセンス
 
-MIT License - 詳細はLICENSEファイルを参照
+MIT License 
 
 ## 貢献
 
