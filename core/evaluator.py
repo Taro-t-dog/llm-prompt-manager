@@ -55,63 +55,63 @@ class GeminiEvaluator:
                 generation_config=current_generation_config
             )
 
-            # レスポンスからテキストを取得 (モデルやSDKのバージョンにより調整が必要な場合あり)
-            # 通常、response.text または response.parts[0].text で取得可能
             if hasattr(response, 'text') and response.text:
                 response_text = response.text
             elif response.parts:
                 response_text = "".join(part.text for part in response.parts if hasattr(part, 'text'))
             else:
-                # テキストが取得できない場合、プロンプトのフィードバックを確認
                 if response.prompt_feedback and response.prompt_feedback.block_reason:
                     error_message = f"Blocked: {response.prompt_feedback.block_reason_message or response.prompt_feedback.block_reason}"
-                else:
+                # block_reasonがない場合でもテキストがない場合はエラーメッセージを設定することが望ましい
+                if not response_text and not error_message: # エラーメッセージがまだ設定されていなければ
                     error_message = "No text content in response and no explicit blocking reason."
 
 
-            # APIのusage_metadataからトークン数を取得
             if hasattr(response, 'usage_metadata'):
                 input_tokens = response.usage_metadata.prompt_token_count
-                # candidates_token_countは、生成された候補全体のトークン数を示すことが多い
                 output_tokens = response.usage_metadata.candidates_token_count
                 total_tokens_api = response.usage_metadata.total_token_count
             else:
-                # usage_metadataがない場合のフォールバック (より不正確になる可能性)
-                # この場合、入力トークンのみAPIでカウントし、出力は0とするか、
-                # またはエラーとして扱う方が適切かもしれません。
-                # ここでは、フォールバックとして入力のみカウントする例を示します。
-                # 実際のプロダクションコードでは、このケースをどう扱うか慎重に検討してください。
+                # usage_metadataがない場合はAPIで再カウント（フォールバック）
                 count_tokens_response_input = self.model.count_tokens(prompt)
                 input_tokens = count_tokens_response_input.total_tokens
-                output_tokens = 0 # 出力トークンは不明
-                total_tokens_api = input_tokens # 不完全な合計
-                error_message = (error_message or "") + " Warning: usage_metadata not available. Token counts may be incomplete."
+                if response_text: # レスポンステキストがあれば、それもカウント
+                    count_tokens_response_output = self.model.count_tokens(response_text)
+                    output_tokens = count_tokens_response_output.total_tokens
+                else:
+                    output_tokens = 0
+                total_tokens_api = input_tokens + output_tokens
+                if not error_message: # エラーメッセージがない場合のみ警告を追加
+                    error_message = "Warning: usage_metadata not available. Token counts re-calculated."
+                else: # 既存のエラーメッセージに追記
+                    error_message += " Additionally, usage_metadata not available; token counts re-calculated."
 
 
-            # コスト計算 (model_configにコスト情報がない場合は0)
             input_cost_per_token = self.model_config.get('input_cost_per_token', 0.0)
             output_cost_per_token = self.model_config.get('output_cost_per_token', 0.0)
 
             cost_usd = (input_tokens * input_cost_per_token) + \
                        (output_tokens * output_cost_per_token)
 
-            success_flag = True if response_text or not error_message else False # テキストがあるか、エラーがなければ成功とみなす
+            success_flag = True if response_text else False # レスポンステキストがあれば成功とみなす
+            if error_message and response_text is None: # エラーがありテキストがなければ失敗
+                 success_flag = False
+
 
         except Exception as e:
             error_message = str(e)
             success_flag = False
-            # エラー時にも入力プロンプトのトークン数を計算しておく（オプション）
             try:
                 count_tokens_response_error_input = self.model.count_tokens(prompt)
                 input_tokens = count_tokens_response_error_input.total_tokens
             except Exception:
-                input_tokens = 0 # これも失敗した場合
+                input_tokens = 0
 
         return {
             'response_text': response_text,
             'input_tokens': input_tokens,
             'output_tokens': output_tokens,
-            'total_tokens': total_tokens_api if total_tokens_api else (input_tokens + output_tokens), # APIの合計がない場合は計算値
+            'total_tokens': total_tokens_api if total_tokens_api and hasattr(response, 'usage_metadata') else (input_tokens + output_tokens),
             'cost_usd': cost_usd,
             'model_name': self.model_config['name'],
             'model_id': self.model_config['model_id'],
@@ -167,7 +167,6 @@ class GeminiEvaluator:
 5.  **総括コメント:**
     * [評価全体のまとめや、さらなる改善のためのアドバイスなど]
 """
-        # 評価用プロンプトの実行には、デフォルトの生成設定を使用
         return self.execute_prompt(evaluation_prompt)
 
     def get_model_info(self) -> str:
@@ -181,7 +180,6 @@ class GeminiEvaluator:
     def count_input_tokens(self, text_or_contents: Any) -> int:
         """
         指定されたテキストまたはコンテンツの入力トークン数をAPIを使用してカウントする。
-        これはAPIコール前に概算を得るために使用できる。
 
         Args:
             text_or_contents: トークン数をカウントするテキスト文字列、または genai.types.ContentsType
@@ -193,7 +191,6 @@ class GeminiEvaluator:
             count_response = self.model.count_tokens(text_or_contents)
             return count_response.total_tokens
         except Exception:
-            # APIでのカウントに失敗した場合、非常に大まかな推定または0を返す
             if isinstance(text_or_contents, str):
-                return len(text_or_contents.split()) # 非常に粗い近似
+                return len(text_or_contents.split()) # 非常に粗い近似 fallback
             return 0
