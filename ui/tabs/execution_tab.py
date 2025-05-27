@@ -210,7 +210,7 @@ def _execute_prompt_direct(execution_memo, execution_mode, evaluation_criteria):
     with st.spinner("📊 評価中..."):
         evaluation_result = evaluator.evaluate_response(
             final_prompt,
-            execution_result['response'],
+            execution_result['response_text'],
             evaluation_criteria
         )
     
@@ -226,8 +226,8 @@ def _execute_prompt_direct(execution_memo, execution_mode, evaluation_criteria):
         'user_input': user_input,
         'final_prompt': final_prompt,
         'criteria': evaluation_criteria,
-        'response': execution_result['response'],
-        'evaluation': evaluation_result['response'],
+        'response': execution_result['response_text'],
+        'evaluation': evaluation_result['response_text'],
         'execution_tokens': execution_result['total_tokens'],
         'evaluation_tokens': evaluation_result['total_tokens'],
         'execution_cost': execution_result['cost_usd'],
@@ -264,8 +264,8 @@ def _display_latest_results():
     result_col1, result_col2 = st.columns([2, 1])
     
     with result_col1:
-        render_response_box(execution_result['response'], "🤖 LLMの回答")
-        render_evaluation_box(evaluation_result['response'], "⭐ 評価結果")
+        render_response_box(execution_result['response_text'], "🤖 LLMの回答")
+        render_evaluation_box(evaluation_result['response_text'], "⭐ 評価結果")
     
     with result_col2:
         st.markdown("### 📊 実行情報")
