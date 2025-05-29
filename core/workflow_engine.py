@@ -40,6 +40,7 @@ class StepResult:
     error: Optional[str] = None
     git_record: Optional[Dict] = None
     metadata: Optional[Dict] = None
+    model_name: Optional[str] = None
 
 @dataclass
 class WorkflowExecutionResult:
@@ -57,6 +58,7 @@ class WorkflowExecutionResult:
     final_output: Optional[str]
     error: Optional[str] = None
     metadata: Optional[Dict] = None
+    model_name: Optional[str] = None
 
 class VariableProcessor:
     """高度な変数置換処理クラス"""
@@ -371,15 +373,17 @@ class WorkflowEngine:
             
             # ステップ実行（リトライ機能付き）
             step_result = self._execute_step_with_retry(
-                step_config, context, step_index + 1, execution_id, workflow_config['name']
+                step_config, context, step_index + 1, execution_id, workflow_config.get['name', 'Unnamed Workflow'],
+                use_cache=workflow_config.get('use_cache_by_default', True), # ワークフロー全体の設定から取得
+                auto_retry=workflow_config.get('auto_retry_by_default', True)  # ワークフロー全体の設定から取得
             )
             
-            step_result.execution_time = time.time() - step_start_time
+            
             results.append(step_result)
             
             if not step_result.success:
                 return self._create_failure_result(
-                    execution_id, workflow_config['name'], start_time, 
+                    execution_id, workflow_config.get['name', 'Unnamed Workflow'], start_time, 
                     step_result.error, results
                 )
             
@@ -390,111 +394,133 @@ class WorkflowEngine:
             if step_result.git_record:
                 GitManager.add_commit_to_history(step_result.git_record)
         
-        return self._create_success_result(execution_id, workflow_config['name'], start_time, results)
+        return self._create_success_result(execution_id, workflow_config.get['name', 'Unnamed Workflow'], start_time, results)
     
-    def _execute_step_with_retry(self, step_config: Dict, context: Dict, 
-                               step_number: int, execution_id: str, workflow_name: str) -> StepResult:
-        """リトライ機能付きステップ実行"""
+    # core/workflow_engine.py の WorkflowEngine クラス内 _execute_step_with_retry メソッド (修正版)
+
+    def _execute_step_with_retry(self, step_config: Dict, context: Dict,
+                                 step_number: int, execution_id: str, workflow_name: str,
+                                 use_cache: bool = True, auto_retry: bool = True) -> StepResult:
         attempt = 0
         last_error = None
+        current_max_retries = self.max_retries if auto_retry else 1
         
-        while attempt < self.max_retries:
+        cache_lookup_key: Optional[str] = None # ★ cache_lookup_key をメソッドスコープで初期化
+        if use_cache:
+            cache_lookup_key = self._generate_cache_key(step_config, context)
+            if cache_lookup_key in self._execution_cache:
+                cached_result = self._execution_cache[cache_lookup_key]
+                logger.info(f"Step {step_number}: Using cached result for key {cache_lookup_key[:8]}...")
+                if not hasattr(cached_result, 'execution_time') or cached_result.execution_time is None:
+                     logger.warning(f"Step {step_number}: Cached result (key {cache_lookup_key[:8]}) has missing/None 'execution_time'. This should ideally be set when caching.")
+                return cached_result 
+
+        while attempt < current_max_retries:
             try:
                 attempt += 1
+                step_attempt_start_time = time.time() # この試行の開始時間
                 
-                # キャッシュチェック
-                cache_key = self._generate_cache_key(step_config, context)
-                if cache_key in self._execution_cache:
-                    cached_result = self._execution_cache[cache_key]
-                    logger.info(f"Using cached result for step {step_number}")
-                    return cached_result
-                
-                # プロンプト生成
                 final_prompt = self.variable_processor.substitute_variables(
                     step_config['prompt_template'], context
                 )
                 
-                # LLM実行
                 llm_result = self.evaluator.execute_prompt(final_prompt)
                 
                 if not llm_result['success']:
-                    raise Exception(llm_result.get('error', 'LLM execution failed'))
+                    raise Exception(llm_result.get('error', 'LLM execution reported failure'))
                 
-                # 成功結果の作成
-                step_result = self._create_step_result(
+                step_result = self._create_step_result( # 変数名を step_result に変更
                     step_config, step_number, execution_id, workflow_name,
-                    final_prompt, llm_result, True
+                    final_prompt, llm_result, True, model_name=llm_result.get('model_name')
                 )
+                step_result.execution_time = time.time() - step_attempt_start_time # ★ ここで実行時間を設定
                 
-                # キャッシュに保存
-                self._execution_cache[cache_key] = step_result
+                if use_cache and cache_lookup_key: # ★ cache_lookup_key を使用
+                    self._execution_cache[cache_lookup_key] = step_result # ★ cache_lookup_key を使用
                 
                 return step_result
                 
             except Exception as e:
                 last_error = str(e)
+                logger.warning(f"Step {step_number} (Attempt {attempt}/{current_max_retries}) failed: {last_error}")
                 error_type, _, _ = self.error_handler.categorize_error(last_error)
                 
-                if not self.error_handler.should_retry(error_type, attempt):
+                if attempt >= current_max_retries or not self.error_handler.should_retry(error_type, attempt):
+                    logger.error(f"Step {step_number}: Max retries reached or error not retryable. Failing.")
                     break
                 
-                if attempt < self.max_retries:
-                    delay = self.error_handler.get_retry_delay(error_type, attempt)
-                    logger.info(f"Retrying step {step_number} after {delay} seconds (attempt {attempt + 1})")
-                    time.sleep(delay)
+                delay = self.error_handler.get_retry_delay(error_type, attempt)
+                logger.info(f"Step {step_number}: Retrying in {delay:.2f} seconds...")
+                time.sleep(delay)
         
-        # 失敗結果の作成
-        return self._create_step_result(
+        failed_prompt = "Prompt could not be generated before failure."
+        try:
+            failed_prompt = self.variable_processor.substitute_variables(step_config['prompt_template'], context)
+        except Exception as prompt_err:
+            logger.error(f"Step {step_number}: Could not generate prompt for error reporting: {prompt_err}")
+
+        failed_step_result = self._create_step_result( # 変数名を failed_step_result に変更
             step_config, step_number, execution_id, workflow_name,
-            '', None, False, last_error
+            failed_prompt, None, False, last_error
         )
-    
+        # 失敗時も実行時間を記録しておく
+        # step_attempt_start_time が try ブロック内で定義されているため、スコープ外になる可能性に注意
+        # このため、step_attempt_start_time はループの開始時に初期化するのが良いかもしれないが、
+        # 現在のロジックでは、最後の試行の時間を記録することになる。
+        # より正確には、失敗した最後の試行の時間を記録するか、あるいは総試行時間を記録する。
+        # ここでは、最後に失敗した試行の時間を記録する。
+        if 'step_attempt_start_time' in locals() or 'step_attempt_start_time' in globals(): # 変数が定義されているか確認
+             failed_step_result.execution_time = time.time() - step_attempt_start_time
+        else: # tryブロックに一度も入らなかった場合など（通常はありえない）
+             failed_step_result.execution_time = 0.0
+
+        return failed_step_result
+
+    # _create_step_result メソッドも model_name を受け取れるように修正
     def _create_step_result(self, step_config: Dict, step_number: int, execution_id: str,
-                          workflow_name: str, prompt: str, llm_result: Optional[Dict],
-                          success: bool, error: Optional[str] = None) -> StepResult:
+                            workflow_name: str, prompt: str, llm_result: Optional[Dict],
+                            success: bool, error: Optional[str] = None, model_name: Optional[str] = None) -> StepResult: # model_name 引数追加
         """ステップ結果を作成"""
+        step_result_data = {
+            'success': success,
+            'step_number': step_number,
+            'step_name': step_config['name'],
+            'prompt': prompt,
+            'response': llm_result['response_text'] if success and llm_result else '',
+            'tokens': llm_result['total_tokens'] if success and llm_result else 0,
+            'cost': llm_result['cost_usd'] if success and llm_result else 0.0,
+            'execution_time': 0,  # This will be set by the calling function (_execute_workflow_steps or _execute_step_with_retry)
+            'error': error,
+            'git_record': None, # git_record は成功時のみ作成
+            'metadata': llm_result.get('metadata') if success and llm_result and hasattr(llm_result, 'metadata') else None, # メタデータも保持
+            'model_name': model_name if model_name else (llm_result.get('model_name') if success and llm_result else None) # モデル名
+        }
+
         if success and llm_result:
-            # Git記録作成
-            git_record = GitManager.create_commit({
+            git_commit_data = {
                 'timestamp': datetime.datetime.now(),
                 'execution_mode': f'Workflow Step {step_number}',
                 'final_prompt': prompt,
                 'response': llm_result['response_text'],
-                'evaluation': f'Step {step_number}: {step_config["name"]}',
+                'evaluation': f'Step {step_number}: {step_config["name"]}', # 簡易的な評価文字列
                 'execution_tokens': llm_result['total_tokens'],
-                'evaluation_tokens': 0,
+                'evaluation_tokens': 0, # ステップ単位では評価LLMコールはない
                 'execution_cost': llm_result['cost_usd'],
                 'evaluation_cost': 0.0,
                 'total_cost': llm_result['cost_usd'],
                 'model_name': llm_result['model_name'],
                 'model_id': llm_result['model_id'],
-                'workflow_id': execution_id,
-                'step_number': step_number
-            }, f'Workflow: {workflow_name} - {step_config["name"]}')
-            
-            return StepResult(
-                success=True,
-                step_number=step_number,
-                step_name=step_config['name'],
-                prompt=prompt,
-                response=llm_result['response_text'],
-                tokens=llm_result['total_tokens'],
-                cost=llm_result['cost_usd'],
-                execution_time=0,  # 後で設定
-                git_record=git_record
-            )
-        else:
-            return StepResult(
-                success=False,
-                step_number=step_number,
-                step_name=step_config['name'],
-                prompt=prompt,
-                response='',
-                tokens=0,
-                cost=0,
-                execution_time=0,
-                error=error
-            )
+                'workflow_id': execution_id, # ワークフロー全体の実行ID
+                'workflow_name': workflow_name, # ワークフロー名
+                'step_number': step_number,
+                'step_name': step_config['name'] # ステップ名も記録
+            }
+            commit_message = f'WF: {workflow_name} - Step: {step_config["name"]}'
+            step_result_data['git_record'] = GitManager.create_commit(git_commit_data, commit_message)
+
+        return StepResult(**step_result_data) # StepResult オブジェクトを返す
+    
+   
     
     def _generate_cache_key(self, step_config: Dict, context: Dict) -> str:
         """キャッシュキーを生成"""
