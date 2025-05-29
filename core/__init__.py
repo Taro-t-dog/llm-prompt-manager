@@ -5,9 +5,13 @@
 from .evaluator import GeminiEvaluator
 from .git_manager import GitManager
 from .data_manager import DataManager
+from .workflow_engine import WorkflowEngine, WorkflowManager
 
 __all__ = [
-    'GeminiEvaluator',  # カンマを追加
-    'GitManager',       # カンマを追加
-    'DataManager'
+    'GeminiEvaluator',
+    'GitManager', 
+    'DataManager',
+    'WorkflowEngine',
+    'WorkflowManager'
 ]
+

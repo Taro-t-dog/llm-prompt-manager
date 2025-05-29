@@ -1,3 +1,6 @@
+# ============================================
+# app.py (統合版 - 最小限の変更)
+# ============================================
 import streamlit as st
 import pandas as pd
 import json
@@ -19,7 +22,7 @@ st.set_page_config(
 # ↓↓↓ st.set_page_config() の後に他のインポートや処理を配置 ↓↓↓
 
 from config import MODEL_CONFIGS, get_model_config, get_model_options, get_model_labels, is_free_model
-from core import GeminiEvaluator, GitManager # DataManagerもcoreからインポートされる想定
+from core import GeminiEvaluator, GitManager, WorkflowEngine, WorkflowManager # 🆕 WorkflowEngine, WorkflowManager を追加
 try:
     from core import DataManager
 except ImportError:
@@ -137,14 +140,36 @@ from ui.tabs import ( # タブモジュールからのインポート
 # スタイル読み込み (st.set_page_config の後)
 load_styles()
 
-# セッション状態の初期化 (st.set_page_config の後)
-GitManager.initialize_session_state() # GitManagerがst.session_stateを内部で使う
-if 'api_key' not in st.session_state:
-    st.session_state.api_key = ""
-if 'selected_model' not in st.session_state:
-    # 利用可能なモデルリストから最初のものをデフォルトにするか、固定値を設定
-    model_options = get_model_options()
-    st.session_state.selected_model = model_options[0] if model_options else "gemini-1.5-flash-latest" # または適切なデフォルト
+# 🆕 セッション状態の初期化 (ワークフロー機能対応)
+def initialize_all_session_state():
+    """全てのセッション状態を初期化（既存機能 + 新機能）"""
+    # 既存のGit管理機能
+    GitManager.initialize_session_state()
+    
+    # 既存のAPI・モデル設定
+    if 'api_key' not in st.session_state:
+        st.session_state.api_key = ""
+    if 'selected_model' not in st.session_state:
+        model_options = get_model_options()
+        st.session_state.selected_model = model_options[0] if model_options else "gemini-1.5-flash-latest"
+    
+    # 🆕 ワークフロー機能用のセッション状態
+    workflow_defaults = {
+        'user_workflows': {},                    # 保存されたワークフロー
+        'current_workflow_execution': None,      # 現在実行中のワークフロー
+        'workflow_execution_progress': {},       # 実行進捗状態
+        'workflow_temp_variables': ['input_1'], # 一時的な変数設定
+        'workflow_temp_steps': [{}],            # 一時的なステップ設定
+        'show_workflow_debug': False,           # デバッグモード
+        'processing_mode': 'single'             # 処理モード (single/workflow)
+    }
+    
+    for key, default_value in workflow_defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = default_value
+
+# セッション状態初期化を実行
+initialize_all_session_state()
 
 
 def render_streamlined_sidebar():
@@ -228,6 +253,18 @@ def render_streamlined_sidebar():
                         st.error(f"❌ インポート失敗: {result_import['error']}")
                 except Exception as e_import:
                     st.error(f"❌ ファイル処理エラー: {str(e_import)}")
+    
+    # 🆕 ワークフロー統計情報
+    if st.session_state.user_workflows:
+        st.markdown("---")
+        st.subheader("🔄 ワークフロー")
+        workflow_count = len(st.session_state.user_workflows)
+        st.metric("保存済みワークフロー", workflow_count)
+        
+        # 最近使用したワークフロー
+        if workflow_count > 0:
+            recent_workflow = list(st.session_state.user_workflows.values())[-1]
+            st.caption(f"最新: {recent_workflow['name']}")
 
 
 def render_git_controls():
@@ -261,7 +298,34 @@ def render_git_controls():
 
 def main():
     global_stats_main = GitManager.get_global_stats() # ヘッダー用に先に取得
-    st.markdown(get_header_html("🚀 LLM Prompt Manager", global_stats_main), unsafe_allow_html=True)
+    
+    # 🆕 ワークフロー統計も含めたヘッダー情報
+    workflow_count = len(st.session_state.user_workflows)
+    
+    # 🆕 Streamlitコンポーネントを使用したヘッダー（HTMLを使わない）
+    st.markdown("# 🚀 LLM Prompt Manager")
+    st.markdown("*単発処理とワークフロー処理でLLMを最大活用*")
+    
+    # ヘッダー統計をメトリクスで表示
+    header_col1, header_col2, header_col3, header_col4 = st.columns(4)
+    
+    with header_col1:
+        st.metric("実行記録", global_stats_main['total_executions'])
+    
+    with header_col2:
+        st.metric("ブランチ", global_stats_main['total_branches'])
+    
+    with header_col3:
+        if workflow_count > 0:
+            st.metric("ワークフロー", workflow_count)
+        else:
+            st.metric("ワークフロー", "0")
+    
+    with header_col4:
+        # 🆕 統一されたコスト表示を使用
+        from ui.styles import format_cost_display
+        cost_display = format_cost_display(global_stats_main['total_cost'])
+        st.metric("総コスト", cost_display)
 
     with st.sidebar:
         render_streamlined_sidebar()
@@ -270,7 +334,7 @@ def main():
         st.warning("⚠️ サイドバーからAPIキーを設定してください。")
         return # ここで処理を終了
 
-    if st.session_state.evaluation_history: # 何か履歴があればGit操作を表示
+    if st.session_state.evaluation_history or st.session_state.user_workflows: # 何か履歴があればGit操作を表示
         render_git_controls()
         st.markdown("---")
 
@@ -278,7 +342,7 @@ def main():
     tab1, tab2, tab3, tab4 = st.tabs(tab_titles)
 
     with tab1:
-        render_execution_tab()
+        render_execution_tab()  # 🆕 拡張された実行タブ（単発 + ワークフロー）
     with tab2:
         render_history_tab()
     with tab3:
