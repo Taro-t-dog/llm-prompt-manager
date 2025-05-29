@@ -5,7 +5,7 @@
 実行タブ - 単発処理と多段階ワークフロー実行
 4つの重要ポイントを全て実装:
 - 変数置換の柔軟性
-- エラーハンドリングの汎用性  
+- エラーハンドリングの汎用性
 - UI のわかりやすさ
 - 実行速度の最適化
 """
@@ -18,7 +18,8 @@ import time
 from typing import Dict, List, Any, Optional
 from config.models import get_model_config
 from core import GeminiEvaluator, GitManager, WorkflowEngine, WorkflowManager
-from ui.components import render_response_box, render_evaluation_box
+# 修正: render_workflow_result_tabs を ui.components からインポート
+from ui.components import render_response_box, render_evaluation_box, render_workflow_result_tabs, render_error_details
 
 # セッション状態の初期化
 def _initialize_session_state():
@@ -38,7 +39,8 @@ def _initialize_session_state():
         'user_workflows': {},
         'current_workflow_execution': None,
         'workflow_execution_progress': {},
-        'show_workflow_debug': False
+        'show_workflow_debug': False,
+        'processing_mode': 'single' # ワークフローモードと単発モードの切り替え用
     }
     for key, default_value in defaults.items():
         if key not in st.session_state:
@@ -61,7 +63,7 @@ def render_execution_tab():
     mode_col1, mode_col2 = st.columns(2)
     
     with mode_col1:
-        if st.button("📝 単発処理", use_container_width=True, 
+        if st.button("📝 単発処理", use_container_width=True,
                     help="1つのプロンプトを実行して結果を取得"):
             st.session_state.processing_mode = "single"
     
@@ -144,7 +146,7 @@ def _render_workflow_execution():
     
     # タブによる機能分離
     workflow_tab1, workflow_tab2, workflow_tab3 = st.tabs([
-        "💾 保存済みワークフロー", 
+        "💾 保存済みワークフロー",
         "🆕 新規ワークフロー作成",
         "🔧 高度な設定"
     ])
@@ -173,11 +175,14 @@ def _render_saved_workflow_execution():
             📄 **文書分析フロー**
             1. 文書構造分析 → 2. 重要ポイント抽出 → 3. 要約・レポート生成
             
-            🔍 **調査研究フロー**  
+            🔍 **調査研究フロー**
             1. 情報収集・整理 → 2. 比較分析 → 3. 考察・提案
             
             💼 **ビジネス分析フロー**
             1. 現状分析 → 2. 課題特定 → 3. 解決策提案
+            
+            コンテンツ作成フロー
+            1. アイデア整理 → 2. 構成作成 → 3. 本文執筆
             
             各ステップで前のステップの結果を `{step_1_output}`, `{step_2_output}` として参照できます。
             """)
@@ -339,14 +344,14 @@ def _render_workflow_builder():
         
         with basic_col1:
             workflow_name = st.text_input(
-                "ワークフロー名", 
+                "ワークフロー名",
                 placeholder="例: 文書分析ワークフロー",
                 help="わかりやすい名前をつけてください"
             )
         
         with basic_col2:
             description = st.text_input(
-                "説明（任意）", 
+                "説明（任意）",
                 placeholder="例: 文書を分析し要約とレポートを生成",
                 help="このワークフローの目的や内容"
             )
@@ -649,14 +654,14 @@ def _execute_workflow_with_progress(workflow_def: Dict, input_values: Dict, opti
     try:
         with st.spinner("🔄 ワークフロー実行中..."):
             result = engine.execute_workflow(
-                workflow_def, 
+                workflow_def,
                 input_values,
                 progress_callback if options.get('show_progress', True) else None
             )
         
         # 結果表示
         with result_container:
-            _render_workflow_result(result, options.get('debug_mode', False))
+            _render_workflow_result(result, options.get('debug_mode', False)) # Pass the boolean value directly
             
     except Exception as e:
         st.error(f"❌ 実行エラー: {str(e)}")
@@ -691,114 +696,119 @@ def _render_execution_progress(state: Dict, workflow_def: Dict):
             else:
                 st.markdown(f"⏸️ Step {i+1}: {step['name']} (待機中)")
 
-def _render_workflow_result(result, debug_mode: bool = False):
-    """🆕 改善されたワークフロー結果表示"""
-    if result.success:
-        st.success(f"✅ ワークフロー完了: {result.workflow_name}")
-        
-        # サマリーメトリクス
-        metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
-        metric_col1.metric("実行時間", f"{result.duration_seconds:.1f}秒")
-        metric_col2.metric("ステップ数", len(result.steps))
-        metric_col3.metric("総コスト", f"${result.total_cost:.4f}")
-        metric_col4.metric("総トークン", f"{result.total_tokens:,}")
-        
-        # 🆕 タブによる結果表示
-        result_tab1, result_tab2, result_tab3 = st.tabs([
-            "🎯 最終結果", 
-            "📋 ステップ詳細", 
-            "🐛 デバッグ情報" if debug_mode else "📊 統計情報"
-        ])
-        
-        with result_tab1:
-            st.markdown("### 🎯 最終出力")
-            st.text_area("", value=result.final_output, height=400, key="final_result_display")
-            
-            # コピーボタン
-            if st.button("📋 結果をコピー"):
-                st.code(result.final_output)
-        
-        with result_tab2:
-            st.markdown("### 📋 各ステップの詳細結果")
-            for step_result in result.steps:
-                with st.expander(f"Step {step_result.step_number}: {step_result.step_name}"):
-                    detail_col1, detail_col2 = st.columns([3, 1])
-                    
-                    with detail_col1:
-                        st.markdown("**出力:**")
-                        st.text_area("", value=step_result.response, height=200, 
-                                   key=f"step_detail_{step_result.step_number}")
-                    
-                    with detail_col2:
-                        st.metric("実行時間", f"{step_result.execution_time:.1f}秒")
-                        st.metric("トークン", step_result.tokens)
-                        st.metric("コスト", f"${step_result.cost:.4f}")
-                        
-                        if debug_mode and st.button("🔍 プロンプト確認", key=f"show_prompt_{step_result.step_number}"):
-                            st.code(step_result.prompt)
-        
-        with result_tab3:
-            if debug_mode:
-                st.markdown("### 🐛 デバッグ情報")
-                st.json({
-                    'execution_id': result.execution_id,
-                    'status': result.status.value,
-                    'metadata': result.metadata or {}
-                })
-            else:
-                st.markdown("### 📊 実行統計")
-                # ステップ別コスト分析
-                if result.steps:
-                    import pandas as pd
-                    
-                    step_data = []
-                    for step in result.steps:
-                        step_data.append({
-                            'ステップ': f"Step {step.step_number}",
-                            '名前': step.step_name,
-                            'コスト': step.cost,
-                            'トークン': step.tokens,
-                            '実行時間': step.execution_time
-                        })
-                    
-                    df = pd.DataFrame(step_data)
-                    st.dataframe(df, use_container_width=True)
+def _render_workflow_result(result, debug_mode: bool):
+    """🆕 改善されたワークフロー結果表示（execution_tab.py用）"""
+    # 新しい改善された表示関数を使用
+    render_workflow_result_tabs(result, debug_mode) # Use debug_mode directly
     
-    else:
-        # 🆕 エラー詳細表示
-        _render_workflow_error(result)
+    # 🆕 Git履歴への記録（ワークフロー全体として）
+    if result.success:
+        try:
+            # ワークフローの最終結果をGit履歴に記録
+            workflow_record_data = {
+                'timestamp': result.end_time or result.start_time,
+                'execution_mode': f'ワークフロー実行',
+                'workflow_id': result.execution_id,
+                'workflow_name': result.workflow_name,
+                'final_prompt': f"ワークフロー: {result.workflow_name} ({len(result.steps)}ステップ)",
+                'response': result.final_output or "",
+                'evaluation': f"ワークフロー完了: {len(result.steps)}ステップ, {result.duration_seconds:.1f}秒",
+                'execution_tokens': result.total_tokens,
+                'evaluation_tokens': 0,
+                'execution_cost': result.total_cost,
+                'evaluation_cost': 0.0,
+                'total_cost': result.total_cost,
+                'model_name': 'ワークフロー (複数モデル)',
+                'model_id': 'workflow'
+            }
+            
+            # コミットメッセージ
+            commit_message = f"ワークフロー完了: {result.workflow_name}"
+            
+            from core import GitManager
+            workflow_record = GitManager.create_commit(workflow_record_data, commit_message)
+            GitManager.add_commit_to_history(workflow_record)
+            
+            st.info(f"📝 ワークフロー実行結果をGit履歴に記録しました (ID: `{workflow_record['commit_hash']}`)")
+            
+        except Exception as e:
+            st.warning(f"⚠️ Git履歴への記録に失敗しました: {str(e)}")
+    else: # ワークフロー失敗時のエラー表示
+        with st.container():
+            _render_workflow_error(result)
+
+def _display_latest_results():
+    """単発実行結果の表示（改善版）"""
+    if not st.session_state.latest_execution_result:
+        return
+
+    result_data = st.session_state.latest_execution_result
+    initial_exec_res = result_data['execution_result']
+    eval_res = result_data['evaluation_result']
+
+    result_col1, result_col2 = st.columns([2, 1])
+    with result_col1:
+        # from ui.components import render_response_box, render_evaluation_box # この行は不要 (既にグローバルでインポート済み)
+        render_response_box(initial_exec_res['response_text'], "🤖 LLMの回答")
+        render_evaluation_box(eval_res['response_text'], "⭐ 評価結果")
+    
+    with result_col2:
+        st.markdown("### 📊 実行・評価情報")
+        st.metric("モデル名", initial_exec_res.get('model_name', 'N/A'))
+        st.markdown("---")
+        
+        # 🆕 改善されたメトリクス表示
+        from ui.styles import format_detailed_cost_display, format_tokens_display
+        
+        st.markdown("**実行結果**")
+        cols_exec_final = st.columns(2)
+        with cols_exec_final[0]:
+            st.metric("入力トークン", f"{initial_exec_res.get('input_tokens', 0):,}")
+            st.metric("総トークン", f"{initial_exec_res.get('total_tokens', 0):,}")
+        with cols_exec_final[1]:
+            st.metric("出力トークン", f"{initial_exec_res.get('output_tokens', 0):,}")
+            cost_display = format_detailed_cost_display(initial_exec_res.get('cost_usd', 0.0))
+            st.metric("コスト", cost_display)
+        
+        st.markdown("---")
+        st.markdown("**評価処理**")
+        cols_eval_final = st.columns(2)
+        with cols_eval_final[0]:
+            st.metric("入力トークン", f"{eval_res.get('input_tokens', 0):,}")
+            st.metric("総トークン", f"{eval_res.get('total_tokens', 0):,}")
+        with cols_eval_final[1]:
+            st.metric("出力トークン", f"{eval_res.get('output_tokens', 0):,}")
+            eval_cost_display = format_detailed_cost_display(eval_res.get('cost_usd', 0.0))
+            st.metric("コスト", eval_cost_display)
+        
+        st.markdown("---")
+        total_cost_combined = initial_exec_res.get('cost_usd', 0.0) + eval_res.get('cost_usd', 0.0)
+        total_cost_display = format_detailed_cost_display(total_cost_combined)
+        st.metric("合計コスト", total_cost_display)
 
 def _render_workflow_error(result):
-    """🆕 詳細なエラー表示とリカバリー提案"""
-    from core.workflow_engine import WorkflowErrorHandler
-    
-    st.error(f"❌ ワークフロー実行エラー: {result.workflow_name}")
-    
-    # エラー分析
-    error_handler = WorkflowErrorHandler()
-    error_type, description, suggestions = error_handler.categorize_error(result.error or "Unknown error")
-    
-    error_col1, error_col2 = st.columns([2, 1])
-    
-    with error_col1:
-        st.markdown("### 🚨 エラー詳細")
-        st.markdown(f"**エラータイプ:** {description}")
-        st.markdown(f"**詳細メッセージ:** {result.error}")
-        
-        if result.steps:
-            st.markdown("### 📋 完了済みステップ")
-            for step_result in result.steps:
-                st.success(f"✅ Step {step_result.step_number}: {step_result.step_name}")
-    
-    with error_col2:
-        st.markdown("### 💡 対処法")
-        for i, suggestion in enumerate(suggestions, 1):
-            st.markdown(f"{i}. {suggestion}")
-        
-        # 🆕 リトライオプション
-        if error_handler.should_retry(error_type, 1):
-            if st.button("🔄 再実行", type="primary"):
-                st.rerun()
+     """🆕 詳細なエラー表示とリカバリー提案（ui.components.render_error_detailsを使用）"""
+     from core.workflow_engine import WorkflowErrorHandler
+     
+     st.error(f"❌ ワークフロー実行失敗: {result.workflow_name}")
+     
+     # エラー分析
+     error_handler = WorkflowErrorHandler()
+     error_type, description, suggestions = error_handler.categorize_error(result.error or "Unknown error")
+     
+     # ui.components.render_error_details を使用してエラー詳細と対処法を表示
+     render_error_details(error_type, result.error or description, suggestions) # result.error または description を渡す
+     
+     if result.steps:
+         st.markdown("### 📋 完了済みステップ")
+         for step_result in result.steps:
+             st.success(f"✅ Step {step_result.step_number}: {step_result.step_name}")
+     
+     # 🆕 リトライオプション (必要に応じてここでも提供)
+     # if error_handler.should_retry(error_type, 1):
+     #     if st.button("🔄 再実行", type="primary"):
+     #         st.rerun()
+
 
 # 🆕 以下は既存の単発実行用関数（既存コードを維持）
 def _render_prompt_section_form(execution_mode):
@@ -823,14 +833,14 @@ def _render_prompt_section_form(execution_mode):
                 st.code(final_prompt_preview[:500] + "..." if len(final_prompt_preview) > 500 else final_prompt_preview)
         elif prompt_template and "{user_input}" not in prompt_template:
             st.warning("⚠️ テンプレートに{user_input}を含めてください")
-        return prompt_template, user_input_data, st.session_state.single_prompt 
+        return prompt_template, user_input_data, st.session_state.single_prompt
     else:  # 単一プロンプト
         st.markdown("**プロンプト**")
         single_prompt = st.text_area(
             "", value=st.session_state.single_prompt, height=200,
             placeholder="プロンプトを入力してください...", key="single_area_form", label_visibility="collapsed"
         )
-        return st.session_state.prompt_template, st.session_state.user_input_data, single_prompt 
+        return st.session_state.prompt_template, st.session_state.user_input_data, single_prompt
 
 def _render_evaluation_section_form():
     st.markdown("### 📋 評価基準")
@@ -877,7 +887,8 @@ def _execute_prompt_and_evaluation_sequentially(
         initial_execution_result = evaluator.execute_prompt(final_prompt)
 
     if not initial_execution_result or not initial_execution_result['success']:
-        st.error(f"❌ 一次実行エラー: {initial_execution_result.get('error', '不明なエラー')}")
+        with placeholder_final_eval_info.container():
+            st.error(f"❌ 一次実行エラー: {initial_execution_result.get('error', '不明なエラー')}")
         return
 
     with placeholder_intermediate_resp.container():
@@ -956,42 +967,6 @@ def _validate_inputs_direct(execution_memo, execution_mode, evaluation_criteria,
         errors.append("❌ 評価基準を入力してください")
     return errors
 
-def _display_latest_results():
-    if not st.session_state.latest_execution_result:
-        return
-
-    result_data = st.session_state.latest_execution_result
-    initial_exec_res = result_data['execution_result']
-    eval_res = result_data['evaluation_result'] 
-
-    result_col1, result_col2 = st.columns([2, 1])
-    with result_col1:
-        render_response_box(initial_exec_res['response_text'], "🤖 LLMの回答")
-        render_evaluation_box(eval_res['response_text'], "⭐ 評価結果")
-    with result_col2:
-        st.markdown("### 📊 実行・評価情報")
-        st.metric("モデル名", initial_exec_res.get('model_name', 'N/A'))
-        st.markdown("---")
-        st.markdown("**実行結果**")
-        cols_exec_final = st.columns(2)
-        with cols_exec_final[0]:
-            st.metric("入力トークン", f"{initial_exec_res.get('input_tokens', 0):,}")
-            st.metric("総トークン", f"{initial_exec_res.get('total_tokens', 0):,}")
-        with cols_exec_final[1]:
-            st.metric("出力トークン", f"{initial_exec_res.get('output_tokens', 0):,}")
-            st.metric("コスト(USD)", f"${initial_exec_res.get('cost_usd', 0.0):.6f}")
-        st.markdown("---")
-        st.markdown("**評価処理**")
-        cols_eval_final = st.columns(2)
-        with cols_eval_final[0]:
-            st.metric("入力トークン", f"{eval_res.get('input_tokens', 0):,}")
-            st.metric("総トークン", f"{eval_res.get('total_tokens', 0):,}")
-        with cols_eval_final[1]:
-            st.metric("出力トークン", f"{eval_res.get('output_tokens', 0):,}")
-            st.metric("コスト(USD)", f"${eval_res.get('cost_usd', 0.0):.6f}")
-        st.markdown("---")
-        total_cost_combined = initial_exec_res.get('cost_usd', 0.0) + eval_res.get('cost_usd', 0.0)
-        st.metric("合計コスト(USD)", f"${total_cost_combined:.6f}")
 
 def _get_default_prompt_template(step_index: int, available_vars: List[str]) -> str:
     """デフォルトプロンプトテンプレートを生成"""

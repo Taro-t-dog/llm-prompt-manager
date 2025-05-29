@@ -1,5 +1,5 @@
 # ============================================
-# ui/styles.py (ワークフロー機能対応拡張版)
+# ui/styles.py (ワークフロー機能対応拡張版) - 修正版
 # ============================================
 """
 モダンで洗練されたUIスタイル定義
@@ -798,6 +798,28 @@ def format_cost_display(cost: float) -> str:
         return f"${cost:.4f}"  # 中程度の値は4桁
     else:
         return f"${cost:.2f}"  # 大きい値は2桁
+
+
+def format_detailed_cost_display(cost: float) -> str:
+    """🆕 詳細コスト表示関数（省略なし）"""
+    if cost == 0:
+        return "$0.000000"
+    elif cost < 0.000001:
+        return f"${cost:.8f}"
+    else:
+        return f"${cost:.6f}"
+
+
+def format_tokens_display(tokens: int) -> str:
+    """🆕 トークン数表示のフォーマット関数"""
+    if tokens == 0:
+        return "0"
+    elif tokens < 1000:
+        return str(tokens)
+    elif tokens < 1000000:
+        return f"{tokens / 1000:.1f}K"
+    else:
+        return f"{tokens / 1000000:.1f}M"
 
 
 def get_header_html(title: str, stats: dict) -> str:

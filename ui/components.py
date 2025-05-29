@@ -1,16 +1,31 @@
 # ============================================
-# ui/components.py (ワークフロー機能対応拡張版)
+# ui/components.py (修正版 - 構文エラー対応)
 # ============================================
 """
 改善されたUIコンポーネント
 既存機能 + ワークフロー機能のコンポーネントを追加
 """
-
 import streamlit as st
 import datetime
 import json
+import sys
+import os
 from typing import Dict, List, Any, Optional
-from ui.styles import get_response_box_html, get_evaluation_box_html, get_metric_card_html
+
+# パスの追加
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
+# 安全なインポート
+try:
+    from .styles import get_response_box_html, get_evaluation_box_html, get_metric_card_html
+except ImportError:
+    try:
+        from ui.styles import get_response_box_html, get_evaluation_box_html, get_metric_card_html
+    except ImportError:
+        from styles import get_response_box_html, get_evaluation_box_html, get_metric_card_html
 
 
 def render_response_box(content: str, title: str = "🤖 回答", border_color: str = "#667eea"):
@@ -55,9 +70,9 @@ def render_cost_metrics(execution_cost: float, evaluation_cost: float, total_cos
 
 
 def render_execution_card(execution: Dict[str, Any], tags: List[str] = None, show_details: bool = True):
-    """実行記録カード"""
+    """実行記録カード（改善版）"""
     # 🆕 統一されたコスト表示のためにformat_cost_displayをインポート
-    from ui.styles import format_cost_display
+    from ui.styles import format_detailed_cost_display, format_tokens_display
     
     # 基本情報
     timestamp = format_timestamp(execution['timestamp'])
@@ -90,12 +105,18 @@ def render_execution_card(execution: Dict[str, Any], tags: List[str] = None, sho
         """, unsafe_allow_html=True)
     
     with header_col2:
-        cost_display = format_cost_display(execution['execution_cost'])
-        st.metric("コスト", cost_display)
+        # 🆕 詳細コスト表示（省略なし）
+        execution_cost = execution.get('execution_cost', 0)
+        cost_display = format_detailed_cost_display(execution_cost)
+        st.metric("実行コスト", cost_display)
     
     with header_col3:
-        total_tokens = execution['execution_tokens'] + execution['evaluation_tokens']
-        st.metric("トークン", f"{total_tokens:,}")
+        # 🆕 改善されたトークン表示
+        exec_tokens = execution.get('execution_tokens', 0)
+        eval_tokens = execution.get('evaluation_tokens', 0)
+        total_tokens = exec_tokens + eval_tokens
+        formatted_tokens = format_tokens_display(total_tokens)
+        st.metric("トークン", formatted_tokens, help=f"正確な値: {total_tokens:,}")
     
     if show_details:
         if st.expander("📋 詳細を表示"):
@@ -107,12 +128,20 @@ def render_execution_card(execution: Dict[str, Any], tags: List[str] = None, sho
                     render_evaluation_box(execution['evaluation'])
             
             with detail_col2:
-                st.markdown("**📊 メトリクス**")
-                st.metric("実行トークン", f"{execution['execution_tokens']:,}")
-                st.metric("評価トークン", f"{execution['evaluation_tokens']:,}")
+                st.markdown("**📊 詳細メトリクス**")
                 
-                exec_cost_display = format_cost_display(execution['execution_cost'])
+                # 実行メトリクス
+                st.metric("実行トークン", f"{exec_tokens:,}")
+                st.metric("評価トークン", f"{eval_tokens:,}")
+                
+                # 詳細コスト表示
+                exec_cost_display = format_detailed_cost_display(execution_cost)
+                eval_cost_display = format_detailed_cost_display(execution.get('evaluation_cost', 0))
+                total_cost_display = format_detailed_cost_display(execution_cost + execution.get('evaluation_cost', 0))
+                
                 st.metric("実行コスト", exec_cost_display)
+                st.metric("評価コスト", eval_cost_display)
+                st.metric("総コスト", total_cost_display)
                 
                 # 🆕 ワークフロー固有の情報
                 if is_workflow:
@@ -275,7 +304,7 @@ def render_import_section(data_manager_class):
 def render_statistics_summary(global_stats: Dict[str, Any], data_stats: Dict[str, Any]):
     """統計サマリー"""
     # 🆕 統一されたコスト表示のためにformat_cost_displayをインポート
-    from ui.styles import format_cost_display
+    from ui.styles import format_detailed_cost_display
     
     stats_col1, stats_col2, stats_col3 = st.columns(3)
     
@@ -286,7 +315,7 @@ def render_statistics_summary(global_stats: Dict[str, Any], data_stats: Dict[str
         st.metric("実行数", global_stats['total_executions'])
     
     with stats_col3:
-        cost_display = format_cost_display(global_stats['total_cost'])
+        cost_display = format_detailed_cost_display(global_stats['total_cost'])
         st.metric("総コスト", cost_display)
 
 
@@ -445,10 +474,79 @@ def render_workflow_progress(current_step: int, total_steps: int, step_names: Li
 
 
 def render_workflow_result_tabs(result, debug_mode: bool = False):
-    """ワークフロー結果のタブ表示"""
+    """ワークフロー結果のタブ表示（改善版）"""
     if not result.success:
         st.error(f"❌ ワークフロー実行失敗: {result.error}")
         return
+    
+    # 🆕 改善されたサマリーメトリクス表示
+    st.success(f"✅ ワークフロー完了: {result.workflow_name}")
+    
+    # メトリクス表示（省略なし）
+    metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+    
+    with metric_col1:
+        st.metric(
+            "実行時間", 
+            f"{result.duration_seconds:.1f}秒",
+            help="ワークフロー全体の実行時間"
+        )
+    
+    with metric_col2:
+        st.metric(
+            "ステップ数", 
+            f"{len(result.steps)}ステップ",
+            help="実行されたステップの総数"
+        )
+    
+    with metric_col3:
+        # 🆕 詳細コスト表示（省略なし）
+        from ui.styles import format_detailed_cost_display
+        detailed_cost = format_detailed_cost_display(result.total_cost)
+        st.metric(
+            "総コスト", 
+            detailed_cost,
+            help="ワークフロー実行にかかった総コスト"
+        )
+    
+    with metric_col4:
+        # 🆕 トークン数表示改善
+        from ui.styles import format_tokens_display
+        formatted_tokens = format_tokens_display(result.total_tokens)
+        st.metric(
+            "総トークン", 
+            formatted_tokens,
+            help=f"正確な値: {result.total_tokens:,} トークン"
+        )
+    
+    # 🆕 詳細情報パネル
+    with st.expander("💡 詳細メトリクス", expanded=False):
+        detail_col1, detail_col2 = st.columns(2)
+        
+        with detail_col1:
+            st.markdown("### 📊 コスト詳細")
+            st.markdown(f"- **総コスト**: `{format_detailed_cost_display(result.total_cost)}`")
+            if len(result.steps) > 0:
+                avg_cost = result.total_cost / len(result.steps)
+                st.markdown(f"- **平均ステップコスト**: `{format_detailed_cost_display(avg_cost)}`")
+            
+            # ステップ別コスト内訳
+            st.markdown("**ステップ別コスト:**")
+            for step in result.steps:
+                step_cost = format_detailed_cost_display(step.cost)
+                st.markdown(f"- Step {step.step_number}: `{step_cost}`")
+        
+        with detail_col2:
+            st.markdown("### 🔢 トークン詳細")
+            st.markdown(f"- **総トークン**: `{result.total_tokens:,}`")
+            if len(result.steps) > 0:
+                avg_tokens = result.total_tokens // len(result.steps)
+                st.markdown(f"- **平均ステップトークン**: `{avg_tokens:,}`")
+            
+            # ステップ別トークン内訳
+            st.markdown("**ステップ別トークン:**")
+            for step in result.steps:
+                st.markdown(f"- Step {step.step_number}: `{step.tokens:,}`")
     
     # タブ作成
     tabs = ["🎯 最終結果", "📋 ステップ詳細"]
@@ -462,27 +560,79 @@ def render_workflow_result_tabs(result, debug_mode: bool = False):
     # 最終結果タブ
     with tab_objects[0]:
         st.markdown("### 🎯 最終出力")
+        
+        # 文字数情報を追加
+        if result.final_output:
+            char_count = len(result.final_output)
+            word_count = len(result.final_output.split())
+            st.caption(f"📝 {char_count:,} 文字, {word_count:,} 単語")
+        
         st.text_area("", value=result.final_output or "", height=400, key="workflow_final_result")
         
-        if st.button("📋 結果をコピー"):
-            st.code(result.final_output or "")
+        # アクションボタン
+        action_col1, action_col2 = st.columns(2)
+        
+        with action_col1:
+            if st.button("📋 結果をコピー"):
+                st.code(result.final_output or "")
+        
+        with action_col2:
+            if result.final_output:
+                st.download_button(
+                    "💾 テキストファイルでダウンロード",
+                    result.final_output,
+                    f"workflow_result_{result.execution_id}.txt",
+                    "text/plain",
+                    use_container_width=True
+                )
     
     # ステップ詳細タブ
     with tab_objects[1]:
-        st.markdown("### 📋 各ステップの詳細")
+        st.markdown("### 📋 各ステップの詳細結果")
+        
+        # ステップサマリーテーブル
+        if result.steps:
+            import pandas as pd
+            
+            step_summary_data = []
+            for step in result.steps:
+                step_summary_data.append({
+                    'ステップ': f"Step {step.step_number}",
+                    '名前': step.step_name,
+                    'コスト': format_detailed_cost_display(step.cost),
+                    'トークン': f"{step.tokens:,}",
+                    '実行時間': f"{step.execution_time:.1f}秒",
+                    '文字数': len(step.response) if step.response else 0
+                })
+            
+            df = pd.DataFrame(step_summary_data)
+            st.dataframe(df, use_container_width=True, hide_index=True)
+            
+            st.markdown("---")
+        
+        # 各ステップの詳細
         for i, step_result in enumerate(result.steps):
             with st.expander(f"Step {step_result.step_number}: {step_result.step_name}"):
                 step_detail_col1, step_detail_col2 = st.columns([3, 1])
                 
                 with step_detail_col1:
-                    st.markdown("**出力:**")
+                    st.markdown("**📤 出力:**")
+                    
+                    # 文字数情報
+                    if step_result.response:
+                        char_count = len(step_result.response)
+                        word_count = len(step_result.response.split())
+                        st.caption(f"📝 {char_count:,} 文字, {word_count:,} 単語")
+                    
                     st.text_area("", value=step_result.response, height=200, 
                                key=f"workflow_step_result_{i}")
                 
                 with step_detail_col2:
+                    st.markdown("**📊 メトリクス**")
+                    
                     st.metric("実行時間", f"{step_result.execution_time:.1f}秒")
-                    st.metric("トークン", step_result.tokens)
-                    st.metric("コスト", f"${step_result.cost:.4f}")
+                    st.metric("トークン", f"{step_result.tokens:,}")
+                    st.metric("コスト", format_detailed_cost_display(step_result.cost))
                     
                     if st.button("🔍 プロンプト確認", key=f"workflow_step_prompt_{i}"):
                         st.code(step_result.prompt)
@@ -495,26 +645,52 @@ def render_workflow_result_tabs(result, debug_mode: bool = False):
                 'execution_id': result.execution_id,
                 'status': result.status.value if hasattr(result.status, 'value') else str(result.status),
                 'duration_seconds': result.duration_seconds,
+                'total_cost': result.total_cost,
+                'total_tokens': result.total_tokens,
                 'metadata': result.metadata or {}
             }
             st.json(debug_info)
         else:
             st.markdown("### 📊 実行統計")
             if result.steps:
-                import pandas as pd
+                # コスト分析
+                stats_col1, stats_col2 = st.columns(2)
                 
-                step_data = []
-                for step in result.steps:
-                    step_data.append({
-                        'ステップ': f"Step {step.step_number}",
-                        '名前': step.step_name,
-                        'コスト ($)': f"{step.cost:.4f}",
-                        'トークン': step.tokens,
-                        '実行時間 (秒)': f"{step.execution_time:.1f}"
-                    })
+                with stats_col1:
+                    st.markdown("#### 💰 コスト分析")
+                    most_expensive_step = max(result.steps, key=lambda x: x.cost)
+                    st.markdown(f"**最もコストが高いステップ:**")
+                    st.markdown(f"Step {most_expensive_step.step_number}: {format_detailed_cost_display(most_expensive_step.cost)}")
+                    
+                    avg_cost = result.total_cost / len(result.steps)
+                    st.markdown(f"**平均ステップコスト:** {format_detailed_cost_display(avg_cost)}")
                 
-                df = pd.DataFrame(step_data)
-                st.dataframe(df, use_container_width=True)
+                with stats_col2:
+                    st.markdown("#### 🔢 トークン分析")
+                    most_tokens_step = max(result.steps, key=lambda x: x.tokens)
+                    st.markdown(f"**最もトークン数が多いステップ:**")
+                    st.markdown(f"Step {most_tokens_step.step_number}: {most_tokens_step.tokens:,}")
+                    
+                    avg_tokens = result.total_tokens // len(result.steps)
+                    st.markdown(f"**平均ステップトークン:** {avg_tokens:,}")
+                
+                # パフォーマンス分析
+                st.markdown("#### ⚡ パフォーマンス分析")
+                perf_col1, perf_col2, perf_col3 = st.columns(3)
+                
+                with perf_col1:
+                    total_time = sum(step.execution_time for step in result.steps)
+                    st.metric("実際の処理時間", f"{total_time:.1f}秒")
+                
+                with perf_col2:
+                    if result.total_tokens > 0:
+                        efficiency = result.total_cost / result.total_tokens * 1000000
+                        st.metric("効率性", f"${efficiency:.2f}/1M tokens")
+                
+                with perf_col3:
+                    if result.duration_seconds > 0:
+                        throughput = result.total_tokens / result.duration_seconds
+                        st.metric("スループット", f"{throughput:.0f} tokens/秒")
 
 
 def render_variable_substitution_help():
