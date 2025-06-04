@@ -1,11 +1,11 @@
 # ============================================
-# app.py (修正版 - エラー解決)
+# app.py (修正版 - エラー解決 + OpenAI対応)
 # ============================================
 import streamlit as st
 import pandas as pd
 import json
 import datetime
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Union # Added Union
 import re
 import hashlib
 import html
@@ -16,11 +16,7 @@ import os
 # 現在のファイルのディレクトリを取得
 current_file_dir = os.path.dirname(os.path.abspath(__file__))
 # プロジェクトのルートディレクトリを sys.path に追加
-# execution_tab.py が ui/tabs/ の中にあるため、2階層上がルート
-project_root = os.path.abspath(os.path.join(current_file_dir)) # app.pyがルートにある場合
-# もしapp.pyがサブディレクトリにある場合は、適切に調整してください
-# 例: project_root = os.path.abspath(os.path.join(current_file_dir, "..")) # 1階層上の場合
-
+project_root = os.path.abspath(os.path.join(current_file_dir))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
@@ -35,7 +31,10 @@ st.set_page_config(
 # ↓↓↓ st.set_page_config() の後に他のインポートや処理を配置 ↓↓↓
 
 from config import MODEL_CONFIGS, get_model_config, get_model_options, get_model_labels, is_free_model
-from core import GeminiEvaluator, GitManager, WorkflowEngine, WorkflowManager # 🆕 WorkflowEngine, WorkflowManager を追加
+from core import GeminiEvaluator, OpenAIEvaluator, GitManager, WorkflowEngine, WorkflowManager # Added OpenAIEvaluator
+from core.evaluator import GeminiEvaluator # Explicit for typing if needed elsewhere
+from core.openai_evaluator import OpenAIEvaluator # Explicit for typing
+
 try:
     from core import DataManager
 except ImportError:
@@ -94,7 +93,8 @@ except ImportError:
                         'commit_hash': row.get('commit_hash', hashlib.md5(str(row.to_dict()).encode()).hexdigest()[:8]),
                         'commit_message': row.get('commit_message', 'CSVインポート'),
                         'branch': row.get('branch', st.session_state.current_branch),
-                        'model_name': row.get('model_name', 'Unknown Model')
+                        'model_name': row.get('model_name', 'Unknown Model'),
+                        'api_provider': row.get('api_provider', 'gemini') # Add provider for CSV
                     }
                     imported_records.append(record)
                 st.session_state.evaluation_history.extend(imported_records)
@@ -115,14 +115,16 @@ except ImportError:
             else: return f"prompt_data_{timestamp}.{file_type}"
 
         @staticmethod
-        def get_data_statistics(): # 評価履歴がない場合の処理
+        def get_data_statistics():
             if not st.session_state.evaluation_history:
                 return {'total_records': 0, 'models_used': {}, 'date_range': None}
             models_used = {}
             for execution in st.session_state.evaluation_history:
                 model = execution.get('model_name', 'Unknown')
-                models_used[model] = models_used.get(model, 0) + 1
-            return {'total_records': len(st.session_state.evaluation_history), 'models_used': models_used, 'date_range': None } # date_rangeは未実装
+                provider = execution.get('api_provider', 'gemini')
+                display_name = f"{model} ({provider.capitalize()})"
+                models_used[display_name] = models_used.get(display_name, 0) + 1
+            return {'total_records': len(st.session_state.evaluation_history), 'models_used': models_used, 'date_range': None }
 
         @staticmethod
         def validate_data_integrity(): return {'is_valid': True, 'issues': [], 'warnings': []}
@@ -135,91 +137,112 @@ except ImportError:
             st.session_state.current_branch = "main"
 
 
-from ui import ( # uiモジュールからのインポート
+from ui import (
     load_styles, get_response_box_html, get_evaluation_box_html, get_metric_card_html,
     get_header_html, render_response_box, render_evaluation_box, render_cost_metrics,
     render_execution_card, render_comparison_metrics, render_comparison_responses,
     render_comparison_evaluations, render_export_section, render_import_section,
     render_statistics_summary, render_detailed_statistics, format_timestamp
 )
-from ui.tabs import ( # タブモジュールからのインポート
+from ui.tabs import (
     render_execution_tab,
     render_history_tab,
     render_comparison_tab,
     render_visualization_tab
 )
+from ui.styles import format_detailed_cost_display, format_tokens_display # Direct import for main app usage
 
-
-# スタイル読み込み (st.set_page_config の後)
+# スタイル読み込み
 load_styles()
 
-# 🆕 セッション状態の初期化 (ワークフロー機能対応)
+# セッション状態の初期化
 def initialize_all_session_state():
-    """全てのセッション状態を初期化（既存機能 + 新機能）"""
-    # 既存のGit管理機能
     GitManager.initialize_session_state()
     
-    # 既存のAPI・モデル設定
-    if 'api_key' not in st.session_state:
+    if 'api_key' not in st.session_state: # Gemini API Key
         st.session_state.api_key = ""
+    if 'openai_api_key' not in st.session_state: # OpenAI API Key
+        st.session_state.openai_api_key = ""
+
     if 'selected_model' not in st.session_state:
-        model_options = get_model_options()
-        st.session_state.selected_model = model_options[0] if model_options else "gemini-1.5-flash-latest"
-    
-    # 🆕 ワークフロー機能用のセッション状態
+        model_options = get_model_options() # Returns list of model_ids
+        # Default to a Gemini model if available, else first option
+        default_model_candidate = next((m for m in model_options if get_model_config(m).get('api_provider') == 'gemini'), None)
+        if not default_model_candidate and model_options:
+            default_model_candidate = model_options[0]
+        elif not model_options: # Should not happen
+             default_model_candidate = "gemini-1.5-flash" 
+
+        st.session_state.selected_model = default_model_candidate
+
     workflow_defaults = {
-        'user_workflows': {},                    # 保存されたワークフロー
-        'current_workflow_execution': None,      # 現在実行中のワークフロー
-        'workflow_execution_progress': {},       # 実行進捗状態
-        'workflow_temp_variables': ['input_1'], # 一時的な変数設定
-        'workflow_temp_steps': [{}],            # 一時的なステップ設定
-        'show_workflow_debug': False,           # デバッグモード
-        'processing_mode': 'single'             # 処理モード (single/workflow)
+        'user_workflows': {}, 'current_workflow_execution': None,
+        'workflow_execution_progress': {}, 'workflow_temp_variables': ['input_1'],
+        'workflow_temp_steps': [{}], 'show_workflow_debug': False,
+        'processing_mode': 'single'
     }
-    
     for key, default_value in workflow_defaults.items():
         if key not in st.session_state:
             st.session_state[key] = default_value
 
-# セッション状態初期化を実行
 initialize_all_session_state()
 
 
 def render_streamlined_sidebar():
     st.header("⚙️ 設定")
-    api_key_input = st.text_input(
-        "🔑 API Key", value=st.session_state.api_key, type="password", key="api_key_sidebar"
+    
+    st.subheader("🔑 APIキー")
+    # Gemini API Key
+    gemini_api_key_input = st.text_input(
+        "Gemini API Key", value=st.session_state.api_key, type="password", key="api_key_sidebar_gemini",
+        help="Google AI Studio (Makersuite) から取得したAPIキー"
     )
-    if api_key_input != st.session_state.api_key:
-        st.session_state.api_key = api_key_input
-        st.rerun()
+    if gemini_api_key_input != st.session_state.api_key:
+        st.session_state.api_key = gemini_api_key_input
+        # No rerun here, allow user to input both keys before potential reruns
 
-    if not st.session_state.api_key:
-        st.error("APIキーが必要です")
-        st.markdown("[APIキーを取得 →](https://makersuite.google.com/app/apikey)")
-        return
+    # OpenAI API Key
+    openai_api_key_input = st.text_input(
+        "OpenAI API Key", value=st.session_state.openai_api_key, type="password", key="api_key_sidebar_openai",
+        help="OpenAI Platform から取得したAPIキー"
+    )
+    if openai_api_key_input != st.session_state.openai_api_key:
+        st.session_state.openai_api_key = openai_api_key_input
+    
+    # Dynamic API key check based on selected model will be in main()
 
-    st.subheader("🤖 モデル")
-    model_options = get_model_options()
-    current_selected_model = st.session_state.selected_model
-    if current_selected_model not in model_options:
-        current_selected_model = model_options[0] if model_options else None
+    st.subheader("🤖 モデル選択")
+    model_options = get_model_options() # List of model_ids
+    model_display_labels = get_model_labels() # List of display names like "Gemini 1.5 Flash (Gemini)"
 
-    selected_model_idx = model_options.index(current_selected_model) if current_selected_model and current_selected_model in model_options else 0
+    current_selected_model_id = st.session_state.selected_model
+    
+    # Ensure current_selected_model_id is valid, if not, default
+    if current_selected_model_id not in model_options:
+        current_selected_model_id = model_options[0] if model_options else None
+        st.session_state.selected_model = current_selected_model_id
 
-    selected_model_display = st.selectbox(
+    selected_model_idx = 0
+    if current_selected_model_id and current_selected_model_id in model_options:
+        selected_model_idx = model_options.index(current_selected_model_id)
+
+    # Use model_options (IDs) for selectbox, and model_display_labels for format_func
+    selected_model_id_from_ui = st.selectbox(
         "モデルを選択", model_options,
-        format_func=lambda x: MODEL_CONFIGS[x]['name'] if x in MODEL_CONFIGS else x,
+        format_func=lambda x: model_display_labels[model_options.index(x)] if x in model_options else x, # Show pretty name
         index=selected_model_idx, label_visibility="collapsed", key="model_select_sidebar"
     )
-    if selected_model_display != st.session_state.selected_model:
-        st.session_state.selected_model = selected_model_display
-        st.rerun()
+    if selected_model_id_from_ui != st.session_state.selected_model:
+        st.session_state.selected_model = selected_model_id_from_ui
+        st.rerun() # Rerun to update cost info and evaluator instance
 
     if st.session_state.selected_model:
         current_model_config = get_model_config(st.session_state.selected_model)
-        if is_free_model(st.session_state.selected_model):
-            st.success("💰 無料")
+        provider_display = current_model_config.get('api_provider', 'N/A').capitalize()
+        st.caption(f"プロバイダー: {provider_display}")
+
+        if is_free_model(st.session_state.selected_model): # is_free_model checks costs or 'free_tier' flag
+            st.success("💰 無料または無料ティア対象の可能性")
         else:
             input_cost_per_1m = current_model_config.get('input_cost_per_token', 0) * 1000000
             output_cost_per_1m = current_model_config.get('output_cost_per_token', 0) * 1000000
@@ -230,37 +253,25 @@ def render_streamlined_sidebar():
         st.markdown("---")
         st.subheader("📊 統計")
         global_stats = GitManager.get_global_stats()
-        
-        # 🆕 改善された統計表示
-        from ui.styles import format_detailed_cost_display
-        
         st.metric("総実行数 (全ブランチ)", global_stats['total_executions'])
-        
-        # 🆕 詳細コスト表示（省略なし）
         total_cost_display = format_detailed_cost_display(global_stats['total_cost'])
         st.metric("総コスト (全ブランチ)", total_cost_display)
         
-        # 🆕 追加統計情報
         if st.expander("📈 詳細統計", expanded=False):
-            # ブランチ別統計
             st.markdown("**ブランチ別統計:**")
-            for branch_name in GitManager.get_all_branches():
-                branch_stats = GitManager.get_branch_stats(branch_name)
-                if branch_stats['execution_count'] > 0:
-                    branch_cost = format_detailed_cost_display(branch_stats['total_cost'])
-                    st.markdown(f"- `{branch_name}`: {branch_stats['execution_count']}回, {branch_cost}")
+            for branch_name_stats in GitManager.get_all_branches(): # Renamed var
+                branch_stats_val = GitManager.get_branch_stats(branch_name_stats) # Renamed var
+                if branch_stats_val['execution_count'] > 0:
+                    branch_cost_str = format_detailed_cost_display(branch_stats_val['total_cost']) # Renamed var
+                    st.markdown(f"- `{branch_name_stats}`: {branch_stats_val['execution_count']}回, {branch_cost_str}")
             
-            # 🆕 ワークフロー統計
-            workflow_executions = [
-                exec for exec in st.session_state.evaluation_history 
-                if exec.get('workflow_id')
-            ]
+            workflow_executions = [exec_item for exec_item in st.session_state.evaluation_history if exec_item.get('workflow_id')] # Renamed var
             if workflow_executions:
                 st.markdown("**ワークフロー統計:**")
-                workflow_cost = sum(exec.get('execution_cost', 0) for exec in workflow_executions)
-                workflow_cost_display = format_detailed_cost_display(workflow_cost)
+                workflow_cost_val = sum(exec_item.get('total_cost', 0) for exec_item in workflow_executions) # Use total_cost for workflow summary
+                workflow_cost_display_str = format_detailed_cost_display(workflow_cost_val) # Renamed var
                 st.markdown(f"- ワークフロー実行: {len(workflow_executions)}回")
-                st.markdown(f"- ワークフロー総コスト: {workflow_cost_display}")
+                st.markdown(f"- ワークフロー総コスト: {workflow_cost_display_str}")
 
         st.markdown("---")
         st.subheader("💾 データ管理")
@@ -283,7 +294,7 @@ def render_streamlined_sidebar():
                     if uploaded_file_sidebar.name.endswith('.json'):
                         data_import = json.load(uploaded_file_sidebar)
                         result_import = DataManager.import_from_json(data_import)
-                    else:
+                    else: # CSV
                         df_import = pd.read_csv(uploaded_file_sidebar)
                         result_import = DataManager.import_from_csv(df_import)
 
@@ -295,26 +306,17 @@ def render_streamlined_sidebar():
                 except Exception as e_import:
                     st.error(f"❌ ファイル処理エラー: {str(e_import)}")
     
-    # 🆕 ワークフロー統計情報
     if st.session_state.user_workflows:
         st.markdown("---")
         st.subheader("🔄 ワークフロー")
         workflow_count = len(st.session_state.user_workflows)
         st.metric("保存済みワークフロー", workflow_count)
-        
-        # 最近使用したワークフロー
         if workflow_count > 0:
             recent_workflow = list(st.session_state.user_workflows.values())[-1]
             st.caption(f"最新: {recent_workflow['name']}")
-            
-            # 🆕 ワークフロー実行統計
-            workflow_executions = [
-                exec for exec in st.session_state.evaluation_history 
-                if exec.get('workflow_id')
-            ]
-            if workflow_executions:
-                st.caption(f"実行回数: {len(workflow_executions)}回")
-
+            workflow_executions_sidebar = [exec_item for exec_item in st.session_state.evaluation_history if exec_item.get('workflow_id')] # Renamed var
+            if workflow_executions_sidebar:
+                st.caption(f"実行回数: {len(workflow_executions_sidebar)}回")
 
 def render_git_controls():
     st.subheader("🌿 ブランチ管理")
@@ -336,95 +338,85 @@ def render_git_controls():
         new_branch_name_git = st.text_input("新しいブランチ名", label_visibility="collapsed", key="new_branch_name_main")
         if st.button("🌱 作成", use_container_width=True, key="create_branch_main"):
             if new_branch_name_git and GitManager.create_branch(new_branch_name_git):
-                if GitManager.switch_branch(new_branch_name_git): # 作成後すぐに切り替え
+                if GitManager.switch_branch(new_branch_name_git):
                     st.success(f"ブランチ '{new_branch_name_git}' を作成し、切り替えました。")
                     st.rerun()
             elif not new_branch_name_git:
                 st.warning("ブランチ名を入力してください。")
-            else: # create_branchがFalseを返した場合（例: 同名ブランチ存在）
+            else:
                 st.error(f"ブランチ '{new_branch_name_git}' の作成に失敗しました。既に存在する可能性があります。")
 
 
 def main():
     global_stats_main = GitManager.get_global_stats()
+    workflow_count_main = len(st.session_state.user_workflows) # Renamed var
     
-    # 🆕 ワークフロー統計も含めたヘッダー情報
-    workflow_count = len(st.session_state.user_workflows)
-    
-    # 🆕 改善されたヘッダー表示
     st.markdown("# 🚀 LLM Prompt Manager")
     st.markdown("*単発処理とワークフロー処理でLLMを最大活用*")
     
-    # ヘッダー統計をメトリクスで表示（改善版）
     header_col1, header_col2, header_col3, header_col4 = st.columns(4)
-    
-    with header_col1:
-        st.metric("実行記録", global_stats_main['total_executions'])
-    
-    with header_col2:
-        st.metric("ブランチ", global_stats_main['total_branches'])
-    
-    with header_col3:
-        if workflow_count > 0:
-            st.metric("ワークフロー", workflow_count)
-        else:
-            st.metric("ワークフロー", "0")
-    
+    with header_col1: st.metric("実行記録", global_stats_main['total_executions'])
+    with header_col2: st.metric("ブランチ", global_stats_main['total_branches'])
+    with header_col3: st.metric("ワークフロー", workflow_count_main)
     with header_col4:
-        # 🆕 詳細コスト表示（省略なし）
-        from ui.styles import format_detailed_cost_display
-        cost_display = format_detailed_cost_display(global_stats_main['total_cost'])
-        st.metric("総コスト", cost_display)
+        cost_display_main = format_detailed_cost_display(global_stats_main['total_cost']) # Renamed var
+        st.metric("総コスト", cost_display_main)
     
-    # 🆕 詳細統計パネル（オプション）
     if global_stats_main['total_executions'] > 0:
         with st.expander("📊 詳細統計", expanded=False):
             stats_detail_col1, stats_detail_col2, stats_detail_col3 = st.columns(3)
-            
             with stats_detail_col1:
                 st.markdown("#### 📋 実行統計")
-                single_executions = [
-                    exec for exec in st.session_state.evaluation_history 
-                    if not exec.get('workflow_id')
-                ]
-                workflow_executions = [
-                    exec for exec in st.session_state.evaluation_history 
-                    if exec.get('workflow_id')
-                ]
-                
+                single_executions = [exec_item for exec_item in st.session_state.evaluation_history if not exec_item.get('workflow_id')]
+                workflow_executions_main = [exec_item for exec_item in st.session_state.evaluation_history if exec_item.get('workflow_id')] # Renamed var
                 st.markdown(f"- **単発実行**: {len(single_executions)}回")
-                st.markdown(f"- **ワークフロー実行**: {len(workflow_executions)}回")
-            
+                st.markdown(f"- **ワークフロー実行**: {len(workflow_executions_main)}回")
             with stats_detail_col2:
                 st.markdown("#### 💰 コスト分析")
                 if single_executions:
-                    single_cost = sum(exec.get('execution_cost', 0) for exec in single_executions)
-                    single_cost_display = format_detailed_cost_display(single_cost)
-                    st.markdown(f"- **単発コスト**: {single_cost_display}")
-                
-                if workflow_executions:
-                    workflow_cost = sum(exec.get('execution_cost', 0) for exec in workflow_executions)
-                    workflow_cost_display = format_detailed_cost_display(workflow_cost)
-                    st.markdown(f"- **ワークフローコスト**: {workflow_cost_display}")
-            
+                    single_cost_val = sum(exec_item.get('total_cost', 0) for exec_item in single_executions) # Use total_cost for consistency
+                    single_cost_display_str = format_detailed_cost_display(single_cost_val) # Renamed var
+                    st.markdown(f"- **単発コスト**: {single_cost_display_str}")
+                if workflow_executions_main:
+                    workflow_cost_main_val = sum(exec_item.get('total_cost', 0) for exec_item in workflow_executions_main) # Use total_cost
+                    workflow_cost_display_main_str = format_detailed_cost_display(workflow_cost_main_val) # Renamed var
+                    st.markdown(f"- **ワークフローコスト**: {workflow_cost_display_main_str}")
             with stats_detail_col3:
                 st.markdown("#### 🔢 トークン統計")
-                total_tokens = sum(
-                    exec.get('execution_tokens', 0) + exec.get('evaluation_tokens', 0)
-                    for exec in st.session_state.evaluation_history
+                total_tokens_main_val = sum( # Renamed var
+                    exec_item.get('execution_tokens', 0) + exec_item.get('evaluation_tokens', 0)
+                    for exec_item in st.session_state.evaluation_history
                 )
-                
-                from ui.styles import format_tokens_display
-                tokens_display = format_tokens_display(total_tokens)
-                st.markdown(f"- **総トークン**: {tokens_display}")
-                st.markdown(f"- **正確な値**: {total_tokens:,}")
+                tokens_display_main_str = format_tokens_display(total_tokens_main_val) # Renamed var
+                st.markdown(f"- **総トークン**: {tokens_display_main_str}")
+                st.markdown(f"- **正確な値**: {total_tokens_main_val:,}")
 
     with st.sidebar:
         render_streamlined_sidebar()
 
-    if not st.session_state.api_key:
-        st.warning("⚠️ サイドバーからAPIキーを設定してください。")
-        return
+    # API Key and Evaluator Setup
+    evaluator: Union[GeminiEvaluator, OpenAIEvaluator, None] = None # Type hint for clarity
+    selected_model_cfg = get_model_config(st.session_state.selected_model)
+    api_provider = selected_model_cfg.get('api_provider', 'gemini')
+
+    api_key_ok = False
+    if api_provider == 'openai':
+        if st.session_state.openai_api_key:
+            evaluator = OpenAIEvaluator(st.session_state.openai_api_key, selected_model_cfg)
+            api_key_ok = True
+        else:
+            st.warning("⚠️ OpenAIモデルが選択されていますが、サイドバーからOpenAI APIキーが設定されていません。")
+    else: # gemini (default)
+        if st.session_state.api_key:
+            evaluator = GeminiEvaluator(st.session_state.api_key, selected_model_cfg)
+            api_key_ok = True
+        else:
+            st.warning("⚠️ Geminiモデルが選択されていますが、サイドバーからGemini APIキーが設定されていません。")
+            
+    if not api_key_ok:
+        st.error("選択されたモデルに対応するAPIキーを設定してください。機能が制限されます。")
+        # Potentially return early or disable tabs if evaluator is crucial for all.
+        # For now, execution tab will handle its own checks if evaluator is None.
 
     if st.session_state.evaluation_history or st.session_state.user_workflows:
         render_git_controls()
@@ -434,14 +426,16 @@ def main():
     tab1, tab2, tab3, tab4 = st.tabs(tab_titles)
 
     with tab1:
-        render_execution_tab()
+        if evaluator: # Only render if evaluator is successfully created
+            render_execution_tab(evaluator) # Pass the evaluator instance
+        else:
+            st.error(f"実行タブは、選択されたモデル ({selected_model_cfg.get('name')}) のAPIキーが設定されるまで利用できません。")
     with tab2:
         render_history_tab()
     with tab3:
         render_comparison_tab()
     with tab4:
         render_visualization_tab()
-
 
 if __name__ == "__main__":
     main()

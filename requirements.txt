@@ -1,5 +1,5 @@
 # ============================================
-# requirements.txt (ワークフロー機能対応版)
+# requirements.txt (ワークフロー機能 + OpenAI対応)
 # ============================================
 
 # 既存の必須依存関係
@@ -7,141 +7,38 @@ streamlit>=1.28.0
 google-generativeai>=0.3.0
 pandas>=1.5.0
 
-# 🆕 ワークフロー機能で使用する追加依存関係
-# パフォーマンス向上とエラーハンドリング強化のため
+# OpenAI API
+openai>=1.3.0 # Updated to a more recent version for client.responses
+tiktoken>=0.5.0 # For OpenAI token counting
 
-# 非同期処理とタイムアウト管理
+# ワークフロー機能で使用する追加依存関係
 asyncio-timeout>=4.0.2
-
-# より堅牢な日時処理
 python-dateutil>=2.8.2
+jsonschema>=4.17.0 # For potential validation tasks
+colorlog>=6.7.0 # For enhanced logging if used
+pyarrow>=12.0.0 # For efficient data handling with pandas
 
-# JSON処理の高速化とバリデーション
-jsonschema>=4.17.0
-
-# ログ処理の改善
-colorlog>=6.7.0
-
-# メモリ効率的なデータ処理
-pyarrow>=12.0.0
-
-# 🆕 オプション: 開発時のデバッグとテスト用
-# プロダクション環境では不要だが、開発時には有用
-
-# デバッグ情報の詳細表示
+# オプション: 開発時のデバッグとテスト用
 rich>=13.0.0
-
-# テスト実行用（開発時のみ）
 pytest>=7.4.0
-
-# コード品質チェック用（開発時のみ）
 flake8>=6.0.0
-
-# 型チェック用（開発時のみ）
 mypy>=1.5.0
 
-# 🆕 推奨: セキュリティとパフォーマンス向上
-
-# セキュアなランダム値生成
+# 推奨: セキュリティとパフォーマンス向上
 cryptography>=41.0.0
+httpx>=0.24.0 # Streamlit/OpenAI/Google libs might use this internally
+psutil>=5.9.0 # For memory monitoring (optional feature)
 
-# HTTPリクエストの改善（API呼び出し最適化）
-httpx>=0.24.0
-
-# メモリ使用量監視（オプション）
-psutil>=5.9.0
-
-# 🆕 UI/UX改善用の追加ライブラリ
-
-# より高度なデータ可視化（オプション）
-plotly>=5.15.0
-
-# Excel ファイル処理の改善
-openpyxl>=3.1.0
-
-# CSV処理の高速化
-polars>=0.18.0
+# UI/UX改善用の追加ライブラリ
+plotly>=5.15.0 # For advanced visualizations (if visualization_tab uses it)
+openpyxl>=3.1.0 # For Excel export/import if added
+# polars>=0.18.0 # If pandas is replaced or supplemented with polars
 
 # ============================================
 # インストール手順
 # ============================================
-# 基本インストール（必須のみ）:
-# pip install streamlit google-generativeai pandas
+# 基本インストール（必須 + OpenAI）:
+# pip install streamlit google-generativeai pandas openai tiktoken
 
 # 完全インストール（全機能）:
 # pip install -r requirements.txt
-
-# 軽量インストール（基本機能のみ）:
-# pip install streamlit>=1.28.0 google-generativeai>=0.3.0 pandas>=1.5.0 python-dateutil>=2.8.2 jsonschema>=4.17.0
-
-# ============================================
-# バージョン互換性ノート
-# ============================================
-# Python 3.8+ が必要
-# Streamlit 1.28.0+ でワークフロー機能が正常動作
-# google-generativeai 0.3.0+ で最新のGemini APIに対応
-# pandas 1.5.0+ でデータ処理の安定性を確保
-
-# ============================================
-# 環境別インストール例
-# ============================================
-
-# --- 本番環境 ---
-# streamlit>=1.28.0
-# google-generativeai>=0.3.0
-# pandas>=1.5.0
-# python-dateutil>=2.8.2
-# jsonschema>=4.17.0
-# httpx>=0.24.0
-
-# --- 開発環境 ---
-# 上記 + rich>=13.0.0 + pytest>=7.4.0 + mypy>=1.5.0
-
-# --- Docker環境 ---
-# 全依存関係をインストールすることを推奨
-# マルチステージビルドで本番イメージを軽量化可能
-
-# ============================================
-# トラブルシューティング
-# ============================================
-# 
-# Q: インストールエラーが発生する
-# A: Python 3.8+ であることを確認し、pipを最新版に更新
-#    pip install --upgrade pip
-#
-# Q: Streamlitが起動しない  
-# A: 仮想環境を作成して依存関係を分離
-#    python -m venv venv
-#    source venv/bin/activate  # Linux/Mac
-#    venv\Scripts\activate     # Windows
-#    pip install -r requirements.txt
-#
-# Q: Google AI APIエラー
-# A: google-generativeaiが最新版であることを確認
-#    pip install --upgrade google-generativeai
-#
-# Q: メモリ不足エラー
-# A: 大量データ処理時はpolarsまたはpyarrowを使用
-#    pandas.read_csv() の代わりに polars.read_csv() を検討
-
-# ============================================
-# パフォーマンス最適化のための追加設定
-# ============================================
-#
-# 環境変数設定例:
-# export STREAMLIT_SERVER_MAX_UPLOAD_SIZE=200
-# export STREAMLIT_SERVER_MAX_MESSAGE_SIZE=200
-# export STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
-#
-# streamlit設定ファイル (.streamlit/config.toml):
-# [server]
-# maxUploadSize = 200
-# maxMessageSize = 200
-# 
-# [browser]
-# gatherUsageStats = false
-#
-# [theme]
-# primaryColor = "#667eea"
-# backgroundColor = "#ffffff"
-# secondaryBackgroundColor = "#f0f2f6"
