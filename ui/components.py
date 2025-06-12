@@ -301,9 +301,9 @@ def render_workflow_template_selector() -> Optional[str]: return None
 def render_workflow_step_card(step_result: 'StepResult', step_number: int, show_prompt: bool = False, workflow_execution_id: Optional[str] = None):
     icon = "✅" if step_result.success else "❌"
     with st.container(border=True):
-        st.markdown(f"{icon} **Step {step_number}: {step_result.step_name}**")
+        st.markdown(f"{icon} **Step {step_result.step_name}** ({step_result.execution_time:.2f}s)")
         if show_prompt: st.code(step_result.prompt, language='text')
-        st.text_area("出力", step_result.response, height=100, key=f"step_out_{step_number}_{workflow_execution_id}", disabled=True)
+        st.text_area("出力", step_result.response, height=100, key=f"step_out_{step_result.step_name}_{workflow_execution_id}", disabled=True)
 
 def render_workflow_execution_summary(result: 'WorkflowExecutionResult'):
     c1, c2, c3 = st.columns(3)
@@ -311,8 +311,10 @@ def render_workflow_execution_summary(result: 'WorkflowExecutionResult'):
     c2.metric("総コスト", f"${result.total_cost:.6f}")
     c3.metric("総トークン", f"{result.total_tokens:,}")
 
-def render_workflow_live_step(step_number: int, step_name: str, status: str = "running") -> st.empty:
+def render_workflow_live_step(step_name: str, status: str = "running") -> st.empty:
+    """並列実行中の個々のステップ（ノード）のプレースホルダーを返す"""
     placeholder = st.empty()
+    status_icon = "🔄" if status == "running" else ("✅" if status == "completed" else "❌")
     with placeholder.container():
-        st.info(f"🔄 Step {step_number}: 「{step_name}」を実行中...")
+        st.info(f"{status_icon} {status.capitalize()}: {step_name}")
     return placeholder

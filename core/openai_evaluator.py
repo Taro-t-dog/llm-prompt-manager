@@ -1,21 +1,21 @@
 """
-OpenAI API評価エンジン (修正版)
-- openai>=1.3.0 に対応
-- client.chat.completions.create を使用
+OpenAI API評価エンジン (非同期対応版)
+- openai>=1.10.0 に対応
+- openai.AsyncOpenAI を使用
 - メッセージ形式のプロンプトをサポート
 """
 import tiktoken
-from openai import OpenAI as OpenAIClient
+from openai import AsyncOpenAI
 from typing import Dict, Any, Optional, Union, List
 
 class OpenAIEvaluator:
-    """OpenAI APIを使用したプロンプト評価システム (openai>=1.3.0対応)"""
+    """OpenAI APIを使用したプロンプト評価システム (非同期対応)"""
 
     def __init__(self, api_key: str, model_config: dict):
         if not api_key: raise ValueError("OpenAI APIキーが設定されていません。")
         self.api_key = api_key
         self.model_config = model_config
-        self.client = OpenAIClient(api_key=self.api_key)
+        self.client = AsyncOpenAI(api_key=self.api_key)
         try:
             self.tokenizer = tiktoken.encoding_for_model(self.model_config['model_id'])
         except KeyError:
@@ -25,7 +25,7 @@ class OpenAIEvaluator:
         if not text: return 0
         return len(self.tokenizer.encode(text))
 
-    def execute_prompt(self, prompt: str, instructions: Optional[str] = None) -> Dict[str, Any]:
+    async def execute_prompt(self, prompt: str, instructions: Optional[str] = None) -> Dict[str, Any]:
         response_text, input_tokens, output_tokens, cost_usd = None, 0, 0, 0.0
         error_message, success_flag = None, False
         try:
@@ -34,7 +34,7 @@ class OpenAIEvaluator:
             if isinstance(prompt, str): messages.append({"role": "user", "content": prompt})
             else: raise TypeError("プロンプトは文字列である必要があります。")
 
-            response_obj = self.client.chat.completions.create(model=self.model_config['model_id'], messages=messages)
+            response_obj = await self.client.chat.completions.create(model=self.model_config['model_id'], messages=messages)
             
             if response_obj.choices and response_obj.choices[0].message:
                 response_text = response_obj.choices[0].message.content
@@ -61,7 +61,7 @@ class OpenAIEvaluator:
                 'cost_usd': cost_usd, 'model_name': self.model_config.get('name', 'Unknown OpenAI'), 'model_id': self.model_config['model_id'],
                 'success': success_flag, 'error': error_message, 'api_provider': 'openai'}
 
-    def evaluate_response(self, original_prompt: str, llm_response_text: str, evaluation_criteria: str) -> Dict[str, Any]:
+    async def evaluate_response(self, original_prompt: str, llm_response_text: str, evaluation_criteria: str) -> Dict[str, Any]:
         eval_prompt = f"""
 以下の内容を評価してください：
 【元のプロンプト】\n{original_prompt}\n\n【LLMの回答】\n{llm_response_text}\n\n【評価基準】\n{evaluation_criteria}
@@ -75,7 +75,7 @@ class OpenAIEvaluator:
 5.  **総括コメント:**\n    * [評価全体のまとめ]
 """
         eval_instructions = "あなたは専門的な評価者です。ユーザーの基準に基づいて、公正かつ詳細な評価を提供してください。"
-        return self.execute_prompt(prompt=eval_prompt, instructions=eval_instructions)
+        return await self.execute_prompt(prompt=eval_prompt, instructions=eval_instructions)
 
     def get_model_info(self) -> str:
         return f"{self.model_config.get('name', 'Unknown OpenAI')} ({self.model_config.get('api_provider', 'openai').capitalize()})"

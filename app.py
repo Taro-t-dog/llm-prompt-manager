@@ -1,5 +1,5 @@
 # ============================================
-# app.py (ImportError修正)
+# app.py (修正版 - エラー解決 + OpenAI対応)
 # ============================================
 import streamlit as st
 import pandas as pd

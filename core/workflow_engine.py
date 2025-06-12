@@ -1,3 +1,5 @@
+# core/workflow_engine.py (修正後)
+
 """
 汎用多段階LLM処理エンジン
 高度な変数置換、エラーハンドリング、実行速度最適化を実装
@@ -13,6 +15,7 @@ from enum import Enum
 import streamlit as st
 from .git_manager import GitManager
 import logging
+import asyncio # 👈 [追加] asyncioをインポート
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -68,11 +71,12 @@ class WorkflowErrorHandler:
     def categorize_error(self, err_msg: str) -> Tuple[str, str, List[str]]: return 'unknown', err_msg, ['エラー内容を確認して再試行してください。']
 
 class WorkflowEngine:
-    def __init__(self, llm_evaluator, max_retries: int = 3):
+    def __init__(self, llm_evaluator, max_retries: int = 1): # 👈 [変更] デバッグのためリトライ回数を1に
         self.evaluator, self.max_retries = llm_evaluator, max_retries
         self.variable_processor, self.error_handler = VariableProcessor(), WorkflowErrorHandler()
     
-    def execute_workflow(self, wf_config, inputs, progress_callback=None):
+    # 👈 [変更] async def に変更
+    async def execute_workflow(self, wf_config, inputs, progress_callback=None):
         exec_id, start_time = str(uuid.uuid4())[:12], datetime.datetime.now()
         state = {'execution_id': exec_id, 'workflow_name': wf_config.get('name', '無名'), 'status': ExecutionStatus.RUNNING, 'total_steps': len(wf_config.get('steps', []))}
         if progress_callback: progress_callback(state)
@@ -81,7 +85,8 @@ class WorkflowEngine:
         try:
             for i, step_config in enumerate(wf_config.get('steps', [])):
                 if progress_callback: state.update({'current_step': i + 1, 'step_name': step_config.get('name', f'Step {i+1}')}); progress_callback(state)
-                step_result = self._execute_step_with_retry(step_config, context, i + 1, exec_id, wf_config.get('name', '無名'))
+                # 👈 [変更] await を追加
+                step_result = await self._execute_step_with_retry(step_config, context, i + 1, exec_id, wf_config.get('name', '無名'))
                 results.append(step_result)
                 if not step_result.success: return self._create_failure_result(exec_id, wf_config.get('name','無名'), start_time, step_result.error, results)
                 context[f'step_{i+1}_output'] = step_result.response
@@ -89,26 +94,124 @@ class WorkflowEngine:
             if progress_callback: state.update({'status': ExecutionStatus.COMPLETED}); progress_callback(state)
             return self._create_success_result(exec_id, wf_config.get('name','無名'), start_time, results)
         except Exception as e:
+            logger.error(f"Workflow execution failed: {e}", exc_info=True)
             if progress_callback: state.update({'status': ExecutionStatus.FAILED, 'error': str(e)}); progress_callback(state)
             return self._create_failure_result(exec_id, wf_config.get('name','無名'), start_time, str(e), results)
 
-    def _execute_step_with_retry(self, step_config, context, step_num, exec_id, wf_name, use_cache=True, auto_retry=True):
+    # 👈 [変更] async def に変更
+    async def _execute_step_with_retry(self, step_config, context, step_num, exec_id, wf_name, use_cache=True, auto_retry=True):
         attempt, last_error = 0, None
-        while attempt < (self.max_retries if auto_retry else 1):
+        retries = self.max_retries if auto_retry else 1
+        while attempt < retries:
             try:
                 attempt += 1; step_start_time = time.time()
                 prompt = self.variable_processor.substitute_variables(step_config.get('prompt_template', ''), context)
-                llm_res = self.evaluator.execute_prompt(prompt)
+                # 👈 [変更] await を追加
+                llm_res = await self.evaluator.execute_prompt(prompt)
                 if not llm_res.get('success'): raise Exception(llm_res.get('error', 'LLM実行失敗'))
                 res = self._create_step_result(step_config, step_num, exec_id, wf_name, prompt, llm_res, True, model_name=llm_res.get('model_name'))
                 res.execution_time = time.time() - step_start_time; return res
             except Exception as e:
-                last_error = str(e); logger.warning(f"Step {step_num} (Attempt {attempt}) failed: {last_error}")
-                if attempt >= (self.max_retries if auto_retry else 1): break
-                time.sleep(2 ** attempt)
+                last_error = str(e); logger.warning(f"Step {step_num} (Attempt {attempt}/{retries}) failed: {last_error}")
+                if attempt >= retries: break
+                await asyncio.sleep(1 * attempt) # 👈 [変更] 非同期のスリープに変更
         failed_prompt = self.variable_processor.substitute_variables(step_config.get('prompt_template', ''), context)
         failed_res = self._create_step_result(step_config, step_num, exec_id, wf_name, failed_prompt, None, False, last_error)
         failed_res.execution_time = time.time() - (step_start_time if 'step_start_time' in locals() else time.time()); return failed_res
+
+    # 👈 [新規] 並列実行エンジンのメインロジック
+    async def execute_workflow_parallel(self, wf_config, inputs, progress_callback=None):
+        exec_id, start_time = str(uuid.uuid4())[:12], datetime.datetime.now()
+        wf_name = wf_config.get('name', '無名')
+        nodes = wf_config.get('source_yaml', {}).get('nodes', {})
+        
+        if not nodes:
+            return self._create_failure_result(exec_id, wf_name, start_time, "No nodes defined in YAML for parallel execution.", [])
+
+        # 1. 依存関係グラフの構築
+        graph = {node_id: [] for node_id in nodes}
+        in_degree = {node_id: 0 for node_id in nodes}
+        for node_id, node_def in nodes.items():
+            dependencies = self._get_node_dependencies(node_def)
+            for dep_id in dependencies:
+                if dep_id not in graph:
+                    if dep_id in wf_config.get('global_variables', []): continue
+                    return self._create_failure_result(exec_id, wf_name, start_time, f"Node '{node_id}' has an undefined dependency: '{dep_id}'", [])
+                graph[dep_id].append(node_id)
+                in_degree[node_id] += 1
+        
+        context, queue = inputs.copy(), [node_id for node_id, degree in in_degree.items() if degree == 0]
+        completed_count, total_steps, results, running_tasks = 0, len(nodes), [], {}
+
+        # 2. 実行ループ
+        while completed_count < total_steps:
+            runnable_nodes = [node_id for node_id in queue if node_id not in running_tasks]
+            
+            if not runnable_nodes and not running_tasks:
+                 error_msg = f"Workflow stalled. Check for circular dependencies. Uncompleted nodes: {[nid for nid in nodes if nid not in context]}"
+                 logger.error(error_msg)
+                 return self._create_failure_result(exec_id, wf_name, start_time, error_msg, results)
+
+            for node_id in runnable_nodes:
+                task = asyncio.create_task(self._execute_node_task(node_id, nodes[node_id], context, len(results)+1, exec_id, wf_name))
+                running_tasks[node_id] = task
+            queue = []
+
+            if progress_callback:
+                progress_callback({'status': ExecutionStatus.RUNNING, 'total_steps': total_steps, 'completed_steps': completed_count, 'running_steps': set(running_tasks.keys())})
+            
+            done, _ = await asyncio.wait(running_tasks.values(), return_when=asyncio.FIRST_COMPLETED)
+
+            for task in done:
+                node_id = next(nid for nid, t in running_tasks.items() if t == task)
+                del running_tasks[node_id]
+                
+                step_result: StepResult = task.result()
+                results.append(step_result)
+                completed_count += 1
+
+                if not step_result.success:
+                    for running_task in running_tasks.values(): running_task.cancel()
+                    return self._create_failure_result(exec_id, wf_name, start_time, step_result.error, results)
+                
+                context[node_id] = step_result.response
+                if step_result.git_record: GitManager.add_commit_to_history(step_result.git_record)
+
+                for dependent_node in graph.get(node_id, []):
+                    in_degree[dependent_node] -= 1
+                    if in_degree[dependent_node] == 0: queue.append(dependent_node)
+        
+        if progress_callback:
+            progress_callback({'status': ExecutionStatus.COMPLETED, 'total_steps': total_steps, 'completed_steps': completed_count, 'running_steps': set()})
+        
+        final_node_id = next((nid for nid, ndef in nodes.items() if ndef.get('isResult')), None)
+        final_output = context.get(final_node_id, results[-1].response if results else None)
+
+        final_result = self._create_success_result(exec_id, wf_name, start_time, results)
+        final_result.final_output = final_output
+        self._create_workflow_summary_record(final_result)
+        return final_result
+
+    # 👈 [新規] ノードの依存関係を抽出するヘルパー
+    def _get_node_dependencies(self, node_def: Dict) -> List[str]:
+        deps = set()
+        inputs = node_def.get('inputs', [])
+        sources = inputs if isinstance(inputs, list) else list(inputs.values())
+        for source in sources: deps.add(source.lstrip(':'))
+        prompt = node_def.get('prompt_template', '')
+        for var in re.findall(r'\{([^}]+)\}', prompt): deps.add(var.split('|')[0].strip().split('.')[0])
+        return list(deps)
+
+    # 👈 [新規] 単一ノードを実行する非同期タスク
+    async def _execute_node_task(self, node_id: str, node_def: Dict, context: Dict, step_num: int, exec_id: str, wf_name: str) -> StepResult:
+        node_type = node_def.get('type', 'llm')
+        if node_type == 'static':
+            value = self.variable_processor.substitute_variables(node_def.get('value', ''), context)
+            return StepResult(success=True, step_number=step_num, step_name=node_id, prompt="static value", response=value, tokens=0, cost=0, execution_time=0.0)
+        if node_type == 'llm':
+            step_config = {'name': node_id, 'prompt_template': node_def.get('prompt_template', '')}
+            return await self._execute_step_with_retry(step_config, context, step_num, exec_id, wf_name, auto_retry=True)
+        return StepResult(success=False, step_number=step_num, step_name=node_id, prompt="", response="", tokens=0, cost=0, execution_time=0.0, error=f"Unknown node type: {node_type}")
 
     def _create_step_result(self, config, num, exec_id, wf_name, prompt, llm_res, success, error=None, model_name=None):
         data = {'success': success, 'step_number': num, 'step_name': config.get('name', ''), 'prompt': prompt,
@@ -139,7 +242,9 @@ class WorkflowEngine:
         result = WorkflowExecutionResult(success=True, execution_id=exec_id, workflow_name=wf_name, start_time=start_time, end_time=end_time,
                                      duration_seconds=(end_time - start_time).total_seconds(), status=ExecutionStatus.COMPLETED, steps=steps,
                                      total_cost=sum(s.cost for s in steps), total_tokens=sum(s.tokens for s in steps), final_output=steps[-1].response if steps else None)
-        self._create_workflow_summary_record(result); return result
+        # 👈 [変更] サマリーレコード作成を結果生成後に移動
+        # self._create_workflow_summary_record(result); # 並列実行側で呼び出すためコメントアウト
+        return result
 
     def _create_failure_result(self, exec_id, wf_name, start_time, error, completed_steps):
         end_time = datetime.datetime.now()
@@ -147,4 +252,6 @@ class WorkflowEngine:
                                      duration_seconds=(end_time - start_time).total_seconds(), status=ExecutionStatus.FAILED, steps=completed_steps,
                                      total_cost=sum(s.cost for s in completed_steps), total_tokens=sum(s.tokens for s in completed_steps),
                                      final_output=None, error=error)
-        self._create_workflow_summary_record(result); return result
+        # 👈 [変更] サマリーレコード作成を結果生成後に移動
+        # self._create_workflow_summary_record(result); # 並列実行側で呼び出すためコメントアウト
+        return result

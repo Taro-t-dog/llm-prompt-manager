@@ -196,7 +196,7 @@ class GitManager:
                 'latest_commit': None
             }
         
-        total_cost = sum([execution.get('execution_cost', 0) for execution in executions])
+        total_cost = sum([execution.get('total_cost', 0) for execution in executions])
         total_tokens = sum([
             execution.get('execution_tokens', 0) + execution.get('evaluation_tokens', 0) 
             for execution in executions
@@ -321,7 +321,7 @@ class GitManager:
         total_tags = len(st.session_state.tags)
         
         total_cost = sum([
-            execution.get('execution_cost', 0) 
+            execution.get('total_cost', 0) 
             for execution in st.session_state.evaluation_history
         ])
         

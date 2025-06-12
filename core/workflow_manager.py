@@ -1,3 +1,5 @@
+# core/workflow_manager.py (修正後)
+
 import streamlit as st
 import uuid
 import datetime
@@ -17,7 +19,7 @@ class WorkflowManager:
         workflow_id = str(uuid.uuid4())[:12]
         workflow_definition['id'] = workflow_id
         workflow_definition['created_at'] = datetime.datetime.now().isoformat()
-        workflow_definition['version'] = '1.0'
+        workflow_definition['version'] = '1.1' # Version up
         if 'user_workflows' not in st.session_state:
             st.session_state.user_workflows = {}
         st.session_state.user_workflows[workflow_id] = workflow_definition
@@ -48,6 +50,10 @@ class WorkflowManager:
         if original:
             new_workflow = original.copy()
             new_workflow['name'] = new_name
+            # 内部のYAML定義の名前も更新
+            if 'source_yaml' in new_workflow and isinstance(new_workflow['source_yaml'], dict):
+                new_workflow['source_yaml']['name'] = new_name
+                
             for key in ['id', 'created_at', 'version', 'updated_at']:
                 new_workflow.pop(key, None)
             return WorkflowManager.save_workflow(new_workflow)
@@ -57,15 +63,36 @@ class WorkflowManager:
     def validate_workflow(workflow_definition: Dict) -> List[str]:
         """ワークフロー定義の構造と変数の整合性を検証する"""
         errors = []
+        # source_yaml が存在する場合、それを優先して検証
+        if 'source_yaml' in workflow_definition and isinstance(workflow_definition.get('source_yaml'), dict):
+            nodes = workflow_definition['source_yaml'].get('nodes', {})
+            if not nodes:
+                errors.append("ワークフロー定義に 'nodes' がありません。")
+            else:
+                try:
+                    WorkflowManager._topological_sort(nodes)
+                except ValueError as e:
+                    errors.append(str(e))
+                # 各ノードの依存関係の検証
+                all_node_ids = set(nodes.keys())
+                global_vars = set(workflow_definition.get('global_variables', []))
+                for node_id, node_def in nodes.items():
+                    dependencies = WorkflowManager._get_node_dependencies(node_def)
+                    for dep in dependencies:
+                        if dep not in all_node_ids and dep not in global_vars:
+                            errors.append(f"ノード '{node_id}' に未定義の依存関係があります: '{dep}'")
+            return errors
+
+        # フォールバック (古い形式のデータ用)
         if 'name' not in workflow_definition or not workflow_definition['name'].strip():
             errors.append("必須フィールド 'name' が不足しています。")
-        if 'steps' not in workflow_definition or not isinstance(workflow_definition['steps'], list) or not workflow_definition['steps']:
+        if 'steps' not in workflow_definition or not isinstance(workflow_definition['steps'], list):
             errors.append("必須フィールド 'steps' が空か、リスト形式ではありません。")
             return errors
         
         for i, step in enumerate(workflow_definition['steps']):
             errors.extend(WorkflowManager._validate_step(step, i + 1))
-        errors.extend(WorkflowManager._validate_variables(workflow_definition))
+        
         return errors
 
     @staticmethod
@@ -76,29 +103,10 @@ class WorkflowManager:
             return [f"ステップ {step_number}: 定義が辞書形式ではありません。"]
         if 'name' not in step or not step['name'].strip():
             errors.append(f"ステップ {step_number}: 'name' が不足しています。")
-        if 'prompt_template' not in step or not step['prompt_template'].strip():
+        if 'prompt_template' not in step:
             errors.append(f"ステップ {step_number}: 'prompt_template' が不足しています。")
         return errors
-
-    @staticmethod
-    def _validate_variables(workflow_definition: Dict) -> List[str]:
-        """ワークフロー全体の変数の整合性を検証する"""
-        errors, processor = [], VariableProcessor()
-        global_vars = workflow_definition.get('global_variables', [])
-        if not isinstance(global_vars, list):
-            errors.append("'global_variables' はリスト形式である必要があります。")
-            global_vars = []
-        for i, step in enumerate(workflow_definition.get('steps', [])):
-            available_vars = global_vars + [f'step_{j+1}_output' for j in range(i)]
-            template_errors = processor.validate_template(step.get('prompt_template', ''), available_vars)
-            for error in template_errors:
-                errors.append(f"ステップ {i+1} ({step.get('name', '無名')}): {error}")
-        return errors
-
-    # ----------------------------------------------------------------------
-    # 🆕 Phase 1: YAML インポート/エクスポート関連メソッド (修正・統合版)
-    # ----------------------------------------------------------------------
-
+    
     @staticmethod
     def import_from_yaml(yaml_data: str) -> Dict[str, Any]:
         """YAMLからワークフローをインポートする"""
@@ -107,12 +115,10 @@ class WorkflowManager:
             if not isinstance(workflow_data, dict):
                 return {'success': False, 'errors': ['YAMLのルートは辞書形式である必要があります。']}
             
-            # YAML定義を内部形式に変換
             internal_definition, validation_errors = WorkflowManager._parse_yaml_to_internal(workflow_data)
             if validation_errors:
                 return {'success': False, 'errors': validation_errors}
 
-            # save_workflow には正規化された内部定義を渡す
             workflow_id = WorkflowManager.save_workflow(internal_definition)
             return {'success': True, 'workflow_id': workflow_id, 'workflow_name': internal_definition.get('name', '無名')}
 
@@ -123,14 +129,20 @@ class WorkflowManager:
 
     @staticmethod
     def export_to_yaml(workflow_id: str) -> Optional[str]:
-        """ワークフローをYAML形式でエクスポートする（改善版）"""
+        """ワークフローをYAML形式でエクスポートする"""
+        # 👈 [修正] この関数をシンプル化
         workflow = WorkflowManager.get_workflow(workflow_id)
         if not workflow:
             return None
         
-        # 内部形式をYAML形式に変換する
-        yaml_definition = WorkflowManager.parse_internal_to_yaml(workflow)
+        # 保存されている `source_yaml` を直接エクスポート対象とする
+        yaml_definition = workflow.get('source_yaml')
+        if not yaml_definition or not isinstance(yaml_definition, dict):
+             st.error("エクスポート可能なYAML定義が見つかりません。このワークフローは古い形式の可能性があります。")
+             return None
+
         try:
+            # YAML形式に変換して返す
             return yaml.dump(yaml_definition, allow_unicode=True, sort_keys=False, indent=2)
         except Exception as e:
             st.error(f"YAMLエクスポートエラー: {e}")
@@ -140,98 +152,100 @@ class WorkflowManager:
     def _parse_yaml_to_internal(yaml_def: Dict) -> tuple[Dict, list]:
         """YAML定義を正規化された内部ワークフロー形式に変換する"""
         errors = []
-        if 'name' not in yaml_def:
-            errors.append("YAMLに 'name' フィールドがありません。")
-        if 'nodes' not in yaml_def:
-            errors.append("YAMLに 'nodes' フィールドがありません。")
-        if errors:
-            return {}, errors
+        if 'name' not in yaml_def: errors.append("YAMLに 'name' フィールドがありません。")
+        if 'nodes' not in yaml_def: errors.append("YAMLに 'nodes' フィールドがありません。")
+        if errors: return {}, errors
 
         try:
             sorted_node_ids = WorkflowManager._topological_sort(yaml_def['nodes'])
         except ValueError as e:
             return {}, [f"依存関係エラー: {e}"]
         
-        internal_steps = [
-            {'name': node_id, 'prompt_template': yaml_def['nodes'][node_id].get('prompt_template', '')}
-            for node_id in sorted_node_ids if yaml_def['nodes'][node_id].get('type') == 'llm'
-        ]
+        # 逐次実行用の `steps` も生成しておく
+        internal_steps = [{'name': node_id, 'prompt_template': yaml_def['nodes'][node_id].get('prompt_template', '')} for node_id in sorted_node_ids if yaml_def['nodes'][node_id].get('type') == 'llm']
 
         internal_def = {
             'name': yaml_def.get('name', '無名のワークフロー'),
             'description': yaml_def.get('description', ''),
             'global_variables': yaml_def.get('global_variables', []),
             'steps': internal_steps,
-            'source_yaml': yaml_def  # 元のYAML構造を保持
+            'source_yaml': yaml_def
         }
-        return internal_def, []
+        final_errors = WorkflowManager.validate_workflow(internal_def)
+        return internal_def, final_errors
 
     @staticmethod
-    def parse_internal_to_yaml(internal_def: Dict) -> Dict:
-        """内部ワークフロー形式をYAML定義に変換する（改善版）"""
-        # YAMLからインポートされた場合、元の構造を優先的に返す
-        if 'source_yaml' in internal_def and internal_def['source_yaml']:
-            return internal_def['source_yaml']
-
-        # UIビルダーで作成されたワークフローをエクスポートするためのロジック
-        nodes, global_vars = {}, internal_def.get('global_variables', [])
-        for var in global_vars:
+    def parse_builder_to_internal(name: str, desc: str, steps: List[Dict], g_vars: List[str]) -> Dict:
+        """UIビルダーの情報を正規化された内部形式（YAML互換）に変換する"""
+        nodes = {}
+        # 1. グローバル変数を静的ノードとして追加
+        for var in g_vars:
             nodes[var] = {'type': 'static', 'value': f'{{{var}}}'}
-        
-        step_outputs = {}
-        for i, step in enumerate(internal_def.get('steps', [])):
-            node_id = step.get('name', f'step_{i+1}')
-            step_outputs[f"step_{i+1}_output"] = node_id
-            
-            prompt_template, inputs = step.get('prompt_template', ''), []
-            used_vars = re.findall(r'\{([^}]+)\}', prompt_template)
-            
-            for var in set(used_vars):
-                if var in step_outputs:
-                    inputs.append(f":{step_outputs[var]}")
-                elif var in global_vars and f":{var}" not in inputs:
-                    inputs.append(f":{var}")
 
-            if not inputs and i > 0:
-                prev_node_id = internal_def['steps'][i-1].get('name', f'step_{i}')
-                inputs.append(f":{prev_node_id}")
+        # 2. 各ステップをLLMノードとして追加
+        step_names = [s['name'] for s in steps]
+        for i, step in enumerate(steps):
+            node_id = step['name']
             
+            prompt_deps = set()
+            prompt = step.get('prompt_template', '')
+            for var in re.findall(r'\{([^}]+)\}', prompt):
+                dep_name = var.split('|')[0].strip().split('.')[0]
+                if dep_name in step_names or dep_name in g_vars:
+                     prompt_deps.add(dep_name)
+
+            all_deps = sorted(list(set(step.get('dependencies', [])) | prompt_deps))
+
             nodes[node_id] = {
                 'type': 'llm',
                 'agent': 'default',
-                'prompt_template': prompt_template,
-                'inputs': sorted(list(set(inputs)))
+                'prompt_template': step.get('prompt_template', ''),
+                'inputs': [f":{dep}" for dep in all_deps]
             }
-            if i == len(internal_def.get('steps', [])) - 1:
-                nodes[node_id]['isResult'] = True
+        
+        # 最後のLLMノードを isResult とする
+        llm_nodes = [s['name'] for s in steps]
+        if llm_nodes:
+            # 依存関係を持たない最後のノードをisResultとする
+            llm_node_deps = {nid: set(WorkflowManager._get_node_dependencies(nodes[nid])) for nid in llm_nodes}
+            
+            final_candidates = []
+            for nid in llm_nodes:
+                is_depended_on = any(nid in deps for deps in llm_node_deps.values())
+                if not is_depended_on:
+                    final_candidates.append(nid)
+            
+            if final_candidates:
+                 nodes[final_candidates[-1]]['isResult'] = True
+            else: # 循環などで見つからない場合は最後のステップ
+                 nodes[llm_nodes[-1]]['isResult'] = True
 
-        return {
-            'name': internal_def['name'],
-            'description': internal_def.get('description', ''),
-            'global_variables': global_vars,
+        yaml_def = {
+            'name': name,
+            'description': desc,
+            'global_variables': g_vars,
             'nodes': nodes
+        }
+        
+        return {
+            'name': name,
+            'description': desc,
+            'global_variables': g_vars,
+            'steps': steps, 
+            'source_yaml': yaml_def
         }
 
     @staticmethod
     def _topological_sort(nodes: Dict) -> List[str]:
         """ノードの依存関係を解決し、実行順序を決定する"""
         graph, in_degree = {node_id: [] for node_id in nodes}, {node_id: 0 for node_id in nodes}
+        all_node_ids = set(nodes.keys())
         for node_id, node_def in nodes.items():
-            if node_def.get('type') != 'llm':
-                continue
-            inputs = node_def.get('inputs', [])
-            sources = []
-            if isinstance(inputs, list):
-                sources = inputs
-            elif isinstance(inputs, dict):
-                sources = list(inputs.values())
-            
-            for source in sources:
-                source_id = source.lstrip(':')
-                if source_id not in graph:
-                    raise ValueError(f"'{node_id}'が未定義のノード'{source_id}'に依存")
-                graph[source_id].append(node_id)
-                in_degree[node_id] += 1
+            dependencies = WorkflowManager._get_node_dependencies(node_def)
+            for dep_id in dependencies:
+                if dep_id in all_node_ids:
+                    graph[dep_id].append(node_id)
+                    in_degree[node_id] += 1
         
         queue = deque([node_id for node_id, degree in in_degree.items() if degree == 0])
         sorted_order = []
@@ -240,10 +254,23 @@ class WorkflowManager:
             sorted_order.append(u)
             for v in graph.get(u, []):
                 in_degree[v] -= 1
-                if in_degree[v] == 0:
-                    queue.append(v)
+                if in_degree[v] == 0: queue.append(v)
         
         if len(sorted_order) == len(nodes):
             return sorted_order
         else:
-            raise ValueError("ワークフローに循環依存が存在します。")
+            unprocessed = {node for node, degree in in_degree.items() if degree > 0}
+            raise ValueError(f"ワークフローに循環依存が存在します。未処理ノード: {unprocessed}")
+
+    @staticmethod
+    def _get_node_dependencies(node_def: Dict) -> List[str]:
+        """ノードの依存関係を抽出する"""
+        deps = set()
+        inputs = node_def.get('inputs', [])
+        sources = inputs if isinstance(inputs, list) else list(inputs.values())
+        for source in sources:
+             if isinstance(source, str): deps.add(source.lstrip(':'))
+        prompt = node_def.get('prompt_template', '')
+        # プロンプト内の変数も依存関係として解釈
+        for var in re.findall(r'\{([^}]+)\}', prompt): deps.add(var.split('|')[0].strip().split('.')[0])
+        return list(deps)

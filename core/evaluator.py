@@ -1,12 +1,13 @@
 """
-Gemini AI評価エンジン (改訂版)
+Gemini AI評価エンジン (非同期対応版)
 """
 
 import google.generativeai as genai
 from typing import Dict, Any, Optional
+import asyncio
 
 class GeminiEvaluator:
-    """Gemini APIを使用したプロンプト評価システム"""
+    """Gemini APIを使用したプロンプト評価システム (非同期対応)"""
 
     def __init__(self, api_key: str, model_config: dict):
         self.api_key = api_key
@@ -15,13 +16,13 @@ class GeminiEvaluator:
         self.model = genai.GenerativeModel(model_config['model_id'])
         self.generation_config = model_config.get('generation_config')
 
-    def execute_prompt(self, prompt: str, instructions: Optional[str] = None) -> Dict[str, Any]:
+    async def execute_prompt(self, prompt: str, instructions: Optional[str] = None) -> Dict[str, Any]:
         response_text, input_tokens, output_tokens, cost_usd = None, 0, 0, 0.0
         error_message, success_flag = None, False
         try:
             # Geminiではinstructionsはプロンプトに含めるのが一般的
             full_prompt = f"{instructions}\n\n{prompt}" if instructions else prompt
-            response = self.model.generate_content(full_prompt, generation_config=self.generation_config)
+            response = await self.model.generate_content_async(full_prompt, generation_config=self.generation_config)
 
             if hasattr(response, 'text') and response.text: response_text = response.text
             elif response.parts: response_text = "".join(part.text for part in response.parts if hasattr(part, 'text'))
@@ -33,8 +34,11 @@ class GeminiEvaluator:
             if hasattr(response, 'usage_metadata'):
                 input_tokens, output_tokens = response.usage_metadata.prompt_token_count, response.usage_metadata.candidates_token_count
             else:
-                input_tokens = self.model.count_tokens(full_prompt).total_tokens
-                output_tokens = self.model.count_tokens(response_text).total_tokens if response_text else 0
+                # 非同期のcount_tokensは存在しないため、同期メソッドを非同期で実行
+                count_task_input = asyncio.to_thread(self.model.count_tokens, full_prompt)
+                count_task_output = asyncio.to_thread(self.model.count_tokens, response_text) if response_text else None
+                input_tokens = (await count_task_input).total_tokens
+                output_tokens = (await count_task_output).total_tokens if count_task_output else 0
                 error_message = (error_message or "") + " [Warning: usage_metadata not available]"
             
             cost_usd = (input_tokens * self.model_config.get('input_cost_per_token', 0.0)) + (output_tokens * self.model_config.get('output_cost_per_token', 0.0))
@@ -42,14 +46,17 @@ class GeminiEvaluator:
 
         except Exception as e:
             error_message = str(e); success_flag = False
-            try: input_tokens = self.model.count_tokens(full_prompt).total_tokens
-            except: input_tokens = 0
+            try: 
+                count_task_input = asyncio.to_thread(self.model.count_tokens, full_prompt)
+                input_tokens = (await count_task_input).total_tokens
+            except: 
+                input_tokens = 0
 
         return {'response_text': response_text, 'input_tokens': input_tokens, 'output_tokens': output_tokens, 'total_tokens': input_tokens + output_tokens,
                 'cost_usd': cost_usd, 'model_name': self.model_config['name'], 'model_id': self.model_config['model_id'],
                 'success': success_flag, 'error': error_message, 'api_provider': 'gemini'}
 
-    def evaluate_response(self, original_prompt: str, llm_response_text: str, evaluation_criteria: str) -> Dict[str, Any]:
+    async def evaluate_response(self, original_prompt: str, llm_response_text: str, evaluation_criteria: str) -> Dict[str, Any]:
         eval_prompt = f"""
 以下の内容を評価してください：
 【元のプロンプト】\n{original_prompt}\n\n【LLMの回答】\n{llm_response_text}\n\n【評価基準】\n{evaluation_criteria}
@@ -62,7 +69,7 @@ class GeminiEvaluator:
 4.  **改善が望まれる点:**\n    * [具体的な改善点1とその提案]
 5.  **総括コメント:**\n    * [評価全体のまとめ]
 """
-        return self.execute_prompt(eval_prompt)
+        return await self.execute_prompt(eval_prompt)
 
     def get_model_info(self) -> str: return f"{self.model_config.get('name', 'Unknown Model')} ({self.model_config.get('model_id', 'unknown-id')})"
     def is_free_tier(self) -> bool: return self.model_config.get('free_tier', False)
