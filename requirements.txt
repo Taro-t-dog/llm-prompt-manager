@@ -8,7 +8,7 @@ google-generativeai>=0.3.0
 pandas>=1.5.0
 
 # OpenAI API
-openai>=1.3.0 # Updated to a more recent version for client.responses
+openai>=1.3.0 # Updated to a more recent version for client.chat.completions
 tiktoken>=0.5.0 # For OpenAI token counting
 
 # ワークフロー機能で使用する追加依存関係
@@ -33,6 +33,9 @@ psutil>=5.9.0 # For memory monitoring (optional feature)
 plotly>=5.15.0 # For advanced visualizations (if visualization_tab uses it)
 openpyxl>=3.1.0 # For Excel export/import if added
 # polars>=0.18.0 # If pandas is replaced or supplemented with polars
+
+# 🆕 Phase 1 で追加 (ワークフローのYAML定義用)
+PyYAML>=6.0
 
 # ============================================
 # インストール手順
