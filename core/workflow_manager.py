@@ -130,19 +130,16 @@ class WorkflowManager:
     @staticmethod
     def export_to_yaml(workflow_id: str) -> Optional[str]:
         """ワークフローをYAML形式でエクスポートする"""
-        # 👈 [修正] この関数をシンプル化
         workflow = WorkflowManager.get_workflow(workflow_id)
         if not workflow:
             return None
         
-        # 保存されている `source_yaml` を直接エクスポート対象とする
         yaml_definition = workflow.get('source_yaml')
         if not yaml_definition or not isinstance(yaml_definition, dict):
              st.error("エクスポート可能なYAML定義が見つかりません。このワークフローは古い形式の可能性があります。")
              return None
 
         try:
-            # YAML形式に変換して返す
             return yaml.dump(yaml_definition, allow_unicode=True, sort_keys=False, indent=2)
         except Exception as e:
             st.error(f"YAMLエクスポートエラー: {e}")
@@ -161,7 +158,6 @@ class WorkflowManager:
         except ValueError as e:
             return {}, [f"依存関係エラー: {e}"]
         
-        # 逐次実行用の `steps` も生成しておく
         internal_steps = [{'name': node_id, 'prompt_template': yaml_def['nodes'][node_id].get('prompt_template', '')} for node_id in sorted_node_ids if yaml_def['nodes'][node_id].get('type') == 'llm']
 
         internal_def = {
@@ -178,46 +174,49 @@ class WorkflowManager:
     def parse_builder_to_internal(name: str, desc: str, steps: List[Dict], g_vars: List[str]) -> Dict:
         """UIビルダーの情報を正規化された内部形式（YAML互換）に変換する"""
         nodes = {}
-        # 1. グローバル変数を静的ノードとして追加
-        for var in g_vars:
-            nodes[var] = {'type': 'static', 'value': f'{{{var}}}'}
+        # 👈 [修正] グローバル変数を静的ノードとして追加するロジックを削除。
+        # グローバル変数は実行時に context に直接注入されるため、ノードとして定義する必要はない。
 
-        # 2. 各ステップをLLMノードとして追加
+        # 各ステップをLLMノードとして追加
         step_names = [s['name'] for s in steps]
         for i, step in enumerate(steps):
-            node_id = step['name']
-            
+            node_id = step.get('name')
+            if not node_id: continue # 名前がないステップは無視
+
             prompt_deps = set()
             prompt = step.get('prompt_template', '')
             for var in re.findall(r'\{([^}]+)\}', prompt):
                 dep_name = var.split('|')[0].strip().split('.')[0]
+                # 依存先が他のステップかグローバル変数かをチェック
                 if dep_name in step_names or dep_name in g_vars:
                      prompt_deps.add(dep_name)
 
+            # UIで明示的に指定された依存関係と、プロンプトから抽出した依存関係をマージ
             all_deps = sorted(list(set(step.get('dependencies', [])) | prompt_deps))
 
             nodes[node_id] = {
                 'type': 'llm',
-                'agent': 'default',
+                'agent': 'default', # 将来的な拡張用
                 'prompt_template': step.get('prompt_template', ''),
                 'inputs': [f":{dep}" for dep in all_deps]
             }
         
-        # 最後のLLMノードを isResult とする
-        llm_nodes = [s['name'] for s in steps]
+        # 最後のLLMノードを isResult とするロジックは維持
+        llm_nodes = [s['name'] for s in steps if s.get('name')]
         if llm_nodes:
-            # 依存関係を持たない最後のノードをisResultとする
-            llm_node_deps = {nid: set(WorkflowManager._get_node_dependencies(nodes[nid])) for nid in llm_nodes}
+            llm_node_deps = {nid: set(WorkflowManager._get_node_dependencies(nodes[nid])) for nid in llm_nodes if nid in nodes}
             
             final_candidates = []
             for nid in llm_nodes:
+                # 自分に依存しているノードが存在しないノードを探す
                 is_depended_on = any(nid in deps for deps in llm_node_deps.values())
                 if not is_depended_on:
                     final_candidates.append(nid)
             
             if final_candidates:
-                 nodes[final_candidates[-1]]['isResult'] = True
-            else: # 循環などで見つからない場合は最後のステップ
+                 # 複数の終点ノードがある場合、名前順で最後のものを結果とする
+                 nodes[sorted(final_candidates)[-1]]['isResult'] = True
+            elif llm_nodes: # 循環などで見つからない場合は最後のステップを結果とする
                  nodes[llm_nodes[-1]]['isResult'] = True
 
         yaml_def = {
@@ -271,6 +270,5 @@ class WorkflowManager:
         for source in sources:
              if isinstance(source, str): deps.add(source.lstrip(':'))
         prompt = node_def.get('prompt_template', '')
-        # プロンプト内の変数も依存関係として解釈
         for var in re.findall(r'\{([^}]+)\}', prompt): deps.add(var.split('|')[0].strip().split('.')[0])
         return list(deps)
