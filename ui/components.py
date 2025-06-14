@@ -318,3 +318,215 @@ def render_workflow_live_step(step_name: str, status: str = "running") -> st.emp
     with placeholder.container():
         st.info(f"{status_icon} {status.capitalize()}: {step_name}")
     return placeholder
+
+# ui/components.py に追加するメソッド（既存のコードの最後に追加）
+
+def render_workflow_edit_status(workflow_def: Dict[str, Any]) -> None:
+    """編集中のワークフローの状態を表示"""
+    if workflow_def.get('updated_at'):
+        st.info(f"📝 このワークフローは {workflow_def['updated_at'][:16]} に更新されました。")
+    else:
+        st.info("📝 編集モードです。変更を保存してください。")
+
+def render_workflow_validation_errors(errors: List[str]) -> None:
+    """ワークフローのバリデーションエラーを表示"""
+    if errors:
+        st.error("❌ 以下のエラーを修正してください：")
+        for error in errors:
+            st.markdown(f"- {error}")
+
+def render_workflow_backup_info(workflow_id: str) -> None:
+    """ワークフローのバックアップ情報を表示"""
+    from core import WorkflowManager
+    
+    history = WorkflowManager.get_workflow_history(workflow_id)
+    if history:
+        with st.expander("📅 更新履歴"):
+            for entry in reversed(history):
+                action_icon = "🆕" if entry['action'] == 'created' else "✏️"
+                timestamp = entry['timestamp'][:16] if isinstance(entry['timestamp'], str) else str(entry['timestamp'])[:16]
+                st.markdown(f"{action_icon} **{entry['description']}** - {timestamp}")
+
+def render_workflow_dependency_graph(workflow_def: Dict[str, Any]) -> None:
+    """ワークフローの依存関係グラフを表示"""
+    if 'source_yaml' not in workflow_def or not workflow_def['source_yaml'].get('nodes'):
+        st.caption("依存関係グラフを表示するには、YAML形式での定義が必要です。")
+        return
+    
+    nodes = workflow_def['source_yaml']['nodes']
+    global_vars = workflow_def.get('global_variables', [])
+    
+    with st.expander("🔗 依存関係グラフ"):
+        # Mermaid形式でグラフを生成
+        mermaid_code = ["graph TD"]
+        
+        # グローバル変数をノードとして追加
+        for var in global_vars:
+            mermaid_code.append(f'    {var}["{var} (入力)"]')
+            mermaid_code.append(f'    {var} --> {var}_style["fas:fa-database"]')
+        
+        # 各ノードと依存関係を追加
+        for node_id, node_def in nodes.items():
+            if node_def.get('type') == 'llm':
+                mermaid_code.append(f'    {node_id}["{node_id}"]')
+                
+                # 依存関係を矢印で表現
+                dependencies = _get_node_dependencies_for_graph(node_def)
+                for dep in dependencies:
+                    if dep in global_vars or dep in nodes:
+                        mermaid_code.append(f'    {dep} --> {node_id}')
+        
+        # 結果ノードをハイライト
+        for node_id, node_def in nodes.items():
+            if node_def.get('isResult'):
+                mermaid_code.append(f'    {node_id} --> RESULT["🎯 最終結果"]')
+        
+        mermaid_text = "\n".join(mermaid_code)
+        st.code(mermaid_text, language='mermaid')
+
+def _get_node_dependencies_for_graph(node_def: Dict) -> List[str]:
+    """グラフ表示用のノード依存関係を抽出"""
+    dependencies = []
+    
+    # inputs からの依存関係
+    inputs = node_def.get('inputs', [])
+    if isinstance(inputs, list):
+        for inp in inputs:
+            if isinstance(inp, str) and inp.startswith(':'):
+                dependencies.append(inp[1:])
+    elif isinstance(inputs, dict):
+        for value in inputs.values():
+            if isinstance(value, str) and value.startswith(':'):
+                dependencies.append(value[1:])
+    
+    return dependencies
+
+def render_workflow_quick_actions(workflow_id: str, workflow_def: Dict[str, Any]) -> Optional[str]:
+    """ワークフロー用のクイックアクションボタン群"""
+    c1, c2, c3, c4 = st.columns(4)
+    
+    with c1:
+        if st.button("⚡ クイック実行", key=f"quick_run_{workflow_id}", use_container_width=True):
+            return "quick_run"
+    
+    with c2:
+        if st.button("📊 統計表示", key=f"stats_{workflow_id}", use_container_width=True):
+            return "show_stats"
+    
+    with c3:
+        if st.button("🔄 テスト実行", key=f"test_{workflow_id}", use_container_width=True):
+            return "test_run"
+    
+    with c4:
+        if st.button("📋 プレビュー", key=f"preview_{workflow_id}", use_container_width=True):
+            return "preview"
+    
+    return None
+
+def render_workflow_template_preview(workflow_def: Dict[str, Any]) -> None:
+    """ワークフローテンプレートのプレビュー表示"""
+    st.markdown("#### 📋 ワークフロープレビュー")
+    
+    global_vars = workflow_def.get('global_variables', [])
+    if global_vars:
+        st.markdown("##### 🌐 必要な入力変数")
+        for var in global_vars:
+            st.markdown(f"- `{var}`")
+    
+    if 'source_yaml' in workflow_def and workflow_def['source_yaml'].get('nodes'):
+        nodes = workflow_def['source_yaml']['nodes']
+        llm_nodes = [(nid, ndef) for nid, ndef in nodes.items() if ndef.get('type') == 'llm']
+        
+        st.markdown(f"##### ⚙️ 処理ステップ ({len(llm_nodes)}個)")
+        for i, (node_id, node_def) in enumerate(llm_nodes, 1):
+            with st.container(border=True):
+                st.markdown(f"**Step {i}: {node_id}**")
+                
+                # 依存関係を表示
+                deps = _get_node_dependencies_for_graph(node_def)
+                if deps:
+                    deps_display = ", ".join([f"`{d}`" for d in deps])
+                    st.caption(f"依存: {deps_display}")
+                
+                # プロンプトテンプレートのプレビュー
+                prompt = node_def.get('prompt_template', '')
+                if prompt:
+                    preview_lines = prompt.split('\n')[:3]
+                    preview_text = '\n'.join(preview_lines)
+                    if len(prompt.split('\n')) > 3:
+                        preview_text += '\n...'
+                    st.code(preview_text, language='text')
+                
+                # 結果ノードの表示
+                if node_def.get('isResult'):
+                    st.success("🎯 このステップの出力が最終結果となります")
+    else:
+        # 旧形式の場合
+        steps = workflow_def.get('steps', [])
+        st.markdown(f"##### ⚙️ 処理ステップ ({len(steps)}個)")
+        for i, step in enumerate(steps, 1):
+            with st.container(border=True):
+                st.markdown(f"**Step {i}: {step.get('name', f'step_{i}')}**")
+                prompt = step.get('prompt_template', '')
+                if prompt:
+                    preview_lines = prompt.split('\n')[:3]
+                    preview_text = '\n'.join(preview_lines)
+                    if len(prompt.split('\n')) > 3:
+                        preview_text += '\n...'
+                    st.code(preview_text, language='text')
+
+def render_workflow_execution_metrics(workflow_def: Dict[str, Any]) -> None:
+    """ワークフローの実行メトリクス予測を表示"""
+    from core import GitManager
+    
+    # このワークフローの過去の実行履歴を検索
+    workflow_name = workflow_def.get('name', '')
+    executions = [ex for ex in GitManager.get_branch_executions() 
+                 if ex.get('workflow_name') == workflow_name and ex.get('execution_mode') == 'Workflow Summary']
+    
+    if executions:
+        st.markdown("#### 📊 実行履歴メトリクス")
+        
+        total_runs = len(executions)
+        avg_cost = sum(ex.get('total_cost', 0) for ex in executions) / total_runs
+        avg_tokens = sum(ex.get('execution_tokens', 0) for ex in executions) / total_runs
+        
+        c1, c2, c3 = st.columns(3)
+        c1.metric("実行回数", f"{total_runs}回")
+        c2.metric("平均コスト", f"${avg_cost:.6f}")
+        c3.metric("平均トークン", f"{avg_tokens:.0f}")
+        
+        # 最近の実行ステータス
+        recent_executions = sorted(executions, key=lambda x: x.get('timestamp', ''), reverse=True)[:5]
+        success_rate = sum(1 for ex in recent_executions if '成功' in ex.get('evaluation', '')) / len(recent_executions) * 100
+        
+        if success_rate >= 80:
+            st.success(f"✅ 直近の成功率: {success_rate:.0f}% (安定)")
+        elif success_rate >= 60:
+            st.warning(f"⚠️ 直近の成功率: {success_rate:.0f}% (要注意)")
+        else:
+            st.error(f"❌ 直近の成功率: {success_rate:.0f}% (要改善)")
+    else:
+        st.info("📊 まだ実行履歴がありません。実行後にメトリクスが表示されます。")
+
+def render_workflow_comparison_selector(current_workflow_id: str) -> Optional[str]:
+    """他のワークフローとの比較用セレクター"""
+    from core import WorkflowManager
+    
+    workflows = WorkflowManager.get_saved_workflows()
+    other_workflows = {wid: wf for wid, wf in workflows.items() if wid != current_workflow_id}
+    
+    if not other_workflows:
+        st.caption("比較可能な他のワークフローがありません。")
+        return None
+    
+    st.markdown("#### 🔍 他のワークフローと比較")
+    options = {wid: wf.get('name', '無名') for wid, wf in other_workflows.items()}
+    selected_id = st.selectbox(
+        "比較対象を選択", 
+        ['選択なし'] + list(options.keys()), 
+        format_func=lambda x: "選択してください" if x == '選択なし' else options.get(x, x),
+        key=f"compare_selector_{current_workflow_id}"
+    )
+    
+    return selected_id if selected_id != '選択なし' else None

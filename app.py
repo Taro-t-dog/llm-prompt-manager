@@ -10,9 +10,12 @@ import re
 import hashlib
 import html
 import difflib
-
 import sys
 import os
+
+# 既存のインポートの後に追加
+from core.data_manager import DataManager
+from ui.styles import format_detailed_cost_display
 # 現在のファイルのディレクトリを取得
 current_file_dir = os.path.dirname(os.path.abspath(__file__))
 # プロジェクトのルートディレクトリを sys.path に追加
@@ -231,6 +234,160 @@ def main():
     with tab2: render_history_tab()
     with tab3: render_comparison_tab()
     with tab4: render_visualization_tab()
+# app.py (編集機能初期化追加部分のみ)
 
+# セッション状態の初期化関数を修正
+def initialize_all_session_state():
+    GitManager.initialize_session_state()
+    
+    if 'api_key' not in st.session_state:
+        st.session_state.api_key = ""
+    if 'openai_api_key' not in st.session_state:
+        st.session_state.openai_api_key = ""
+
+    if 'selected_model' not in st.session_state:
+        model_options = get_model_options()
+        default_model_candidate = next((m for m in model_options if get_model_config(m).get('api_provider', 'gemini') == 'gemini'), None)
+        if not default_model_candidate and model_options:
+            default_model_candidate = model_options[0]
+        elif not model_options:
+             default_model_candidate = "gemini-1.5-flash-latest"
+
+        st.session_state.selected_model = default_model_candidate
+
+    workflow_defaults = {
+        'user_workflows': {}, 
+        'current_workflow_execution': None, 
+        'workflow_execution_progress': {},
+        'workflow_temp_variables': ['input_1'], 
+        'workflow_temp_steps': [{}], 
+        'show_workflow_debug': False,
+        'processing_mode': 'single',
+        # 編集機能用の追加項目
+        'edit_mode': False,
+        'editing_workflow_id': None,
+        'edit_wf_name': '',
+        'edit_wf_desc': '',
+        'edit_temp_variables': [],
+        'edit_temp_steps': [],
+        'last_selected_workflow_id': None,
+        'workflow_inputs': {}
+    }
+    for key, default_value in workflow_defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = default_value
+
+# render_streamlined_sidebar関数に編集状態表示を追加
+def render_streamlined_sidebar():
+    st.header("⚙️ 設定")
+    
+    # 編集モード中の通知を追加
+    if st.session_state.get('edit_mode', False):
+        editing_wf_name = st.session_state.get('edit_wf_name', '不明')
+        st.warning(f"📝 ワークフロー「{editing_wf_name}」を編集中です")
+        if st.button("編集をキャンセル", type="secondary"):
+            st.session_state.edit_mode = False
+            if 'editing_workflow_id' in st.session_state:
+                del st.session_state.editing_workflow_id
+            st.rerun()
+        st.markdown("---")
+    
+    st.subheader("🔑 APIキー")
+    gemini_api_key = st.text_input("Gemini API Key", value=st.session_state.api_key, type="password", help="Google AI Studio から取得したAPIキー")
+    if gemini_api_key != st.session_state.api_key:
+        st.session_state.api_key = gemini_api_key
+
+    openai_api_key = st.text_input("OpenAI API Key", value=st.session_state.openai_api_key, type="password", help="OpenAI Platform から取得したAPIキー")
+    if openai_api_key != st.session_state.openai_api_key:
+        st.session_state.openai_api_key = openai_api_key
+    
+    st.subheader("🤖 モデル選択")
+    model_options = get_model_options()
+    model_labels = get_model_labels()
+    current_model_id = st.session_state.selected_model
+    
+    if current_model_id not in model_options:
+        current_model_id = model_options[0] if model_options else None
+        st.session_state.selected_model = current_model_id
+
+    selected_model_idx = model_options.index(current_model_id) if current_model_id and current_model_id in model_options else 0
+    
+    selected_model_id = st.selectbox("モデルを選択", model_options, format_func=lambda x: model_labels[model_options.index(x)] if x in model_options else x, index=selected_model_idx, label_visibility="collapsed")
+    if selected_model_id != st.session_state.selected_model:
+        st.session_state.selected_model = selected_model_id
+        st.rerun()
+
+    if st.session_state.selected_model:
+        config = get_model_config(st.session_state.selected_model)
+        provider = config.get('api_provider', 'gemini').capitalize()
+        st.caption(f"プロバイダー: {provider}")
+
+        if is_free_model(st.session_state.selected_model):
+            st.success("💰 無料または無料ティア対象の可能性")
+        else:
+            input_cost = config.get('input_cost_per_token', 0) * 1000000
+            output_cost = config.get('output_cost_per_token', 0) * 1000000
+            st.info(f"💰 ${input_cost:.2f} / 1M入力トークン")
+            st.info(f"💰 ${output_cost:.2f} / 1M出力トークン")
+
+    if st.session_state.evaluation_history:
+        st.markdown("---")
+        st.subheader("📊 統計")
+        stats = GitManager.get_global_stats()
+        st.metric("総実行数 (全ブランチ)", stats['total_executions'])
+        st.metric("総コスト (全ブランチ)", format_detailed_cost_display(stats['total_cost']))
+        
+        if st.expander("📈 詳細統計", expanded=False):
+            st.markdown("**ブランチ別統計:**")
+            for branch in GitManager.get_all_branches():
+                branch_stats = GitManager.get_branch_stats(branch)
+                if branch_stats['execution_count'] > 0:
+                    st.markdown(f"- `{branch}`: {branch_stats['execution_count']}回, {format_detailed_cost_display(branch_stats['total_cost'])}")
+        
+        st.markdown("---")
+        st.subheader("💾 データ管理")
+        c1, c2 = st.columns(2)
+        if c1.button("📤 JSONエクスポート", use_container_width=True):
+            st.download_button("📥 ダウンロード", DataManager.export_to_json(), DataManager.get_file_suggestion("json"), "application/json")
+        if c2.button("📊 CSVエクスポート", use_container_width=True):
+            st.download_button("📥 ダウンロード", DataManager.export_to_csv(), DataManager.get_file_suggestion("csv"), "text/csv")
+
+        uploaded_file = st.file_uploader("📂 インポート (JSON/CSV)", type=["json", "csv"])
+        if uploaded_file:
+            if st.button("⬆️ インポート実行", use_container_width=True):
+                try:
+                    if uploaded_file.name.endswith('.json'):
+                        result = DataManager.import_from_json(json.load(uploaded_file))
+                    else:
+                        result = DataManager.import_from_csv(pd.read_csv(uploaded_file))
+                    if result.get('success'): st.success(f"✅ {result.get('imported_count', 0)}件の記録をインポートしました。"); st.rerun()
+                    else: st.error(f"❌ インポート失敗: {result.get('error', '不明なエラー')}")
+                except Exception as e: st.error(f"❌ ファイル処理エラー: {e}")
+
+# render_git_controls関数も編集モード中は無効化
+def render_git_controls():
+    # 編集モード中はブランチ操作を無効化
+    if st.session_state.get('edit_mode', False):
+        st.info("📝 ワークフロー編集中はブランチ操作が無効です。")
+        return
+    
+    st.subheader("🌿 ブランチ管理")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.write("**現在のブランチ**")
+        branches = GitManager.get_all_branches()
+        current_branch = GitManager.get_current_branch()
+        idx = branches.index(current_branch) if current_branch in branches else 0
+        selected = st.selectbox("ブランチ", branches, index=idx, label_visibility="collapsed")
+        if selected != current_branch:
+            if GitManager.switch_branch(selected): st.rerun()
+    with c2:
+        st.write("**新しいブランチを作成**")
+        new_branch = st.text_input("新しいブランチ名", label_visibility="collapsed")
+        if st.button("🌱 作成", use_container_width=True):
+            if new_branch and GitManager.create_branch(new_branch):
+                if GitManager.switch_branch(new_branch): st.success(f"ブランチ '{new_branch}' を作成し、切り替えました。"); st.rerun()
+            elif not new_branch: st.warning("ブランチ名を入力してください。")
+            else: st.error(f"ブランチ '{new_branch}' の作成に失敗しました。")
 if __name__ == "__main__":
     main()
