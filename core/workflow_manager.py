@@ -60,6 +60,34 @@ class WorkflowManager:
         return None
 
     @staticmethod
+    def update_workflow(workflow_id: str, new_definition: Dict[str, Any]) -> bool:
+        """IDで指定されたワークフローを新しい定義で更新する"""
+        workflows = WorkflowManager.get_saved_workflows()
+        if workflow_id in workflows:
+            original_workflow = workflows[workflow_id]
+            original_created_at = original_workflow.get('created_at', datetime.datetime.now().isoformat())
+            original_version = original_workflow.get('version', '1.0')
+
+            new_definition['id'] = workflow_id
+            new_definition['created_at'] = original_created_at
+            new_definition['updated_at'] = datetime.datetime.now().isoformat()
+            try:
+                # バージョンをインクリメント
+                new_definition['version'] = f"{float(original_version) + 0.1:.1f}"
+            except (ValueError, TypeError):
+                new_definition['version'] = '1.1'
+
+            st.session_state.user_workflows[workflow_id] = new_definition
+            return True
+        return False
+
+    @staticmethod
+    def validate_workflow_update(workflow_id: str, new_definition: Dict) -> List[str]:
+        """ワークフロー更新時のバリデーションを行う。現状は新規作成時と同じ。"""
+        # 更新特有のチェックはここに実装できるが、今のところは汎用バリデーションを呼び出す
+        return WorkflowManager.validate_workflow(new_definition)
+
+    @staticmethod
     def validate_workflow(workflow_definition: Dict) -> List[str]:
         """ワークフロー定義の構造と変数の整合性を検証する"""
         errors = []

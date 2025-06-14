@@ -311,7 +311,7 @@ def render_workflow_execution_summary(result: 'WorkflowExecutionResult'):
     c2.metric("総コスト", f"${result.total_cost:.6f}")
     c3.metric("総トークン", f"{result.total_tokens:,}")
 
-def render_workflow_live_step(step_name: str, status: str = "running") -> st.empty:
+def render_workflow_live_step(step_name: str, status: str = "running"):
     """並列実行中の個々のステップ（ノード）のプレースホルダーを返す"""
     placeholder = st.empty()
     status_icon = "🔄" if status == "running" else ("✅" if status == "completed" else "❌")
